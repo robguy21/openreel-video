@@ -63,7 +63,9 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          zip="openreel-clip-studio-${tag}.zip"
+          # The tag already says "clip-studio", so the asset is openreel-<tag>.zip:
+          # v0.1.0 produced openreel-clip-studio-clip-studio-v0.1.0.zip, which says it twice.
+          zip="openreel-${tag}.zip"
           # -X: no extra timestamps/uids, so the same tree zips to the same bytes.
           (cd apps/web/dist && zip -qrX "${GITHUB_WORKSPACE}/${zip}" .)
           sha256sum "${zip}" > SHA256SUMS
