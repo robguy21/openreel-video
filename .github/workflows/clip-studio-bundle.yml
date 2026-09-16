@@ -11,8 +11,15 @@
 # (.github/workflows/release.yml) - the two must never fire on one tag.
 #
 # The build mirrors Clip Studio's editor/build.ps1 exactly: OPENREEL_BASE=/edit/ so vite
-# writes asset URLs under the sub-path the studio mounts it at, and VITE_DISABLE_SW=1 so
-# there is no offline service worker caching a stale shell.
+# writes asset URLs under the sub-path the studio mounts it at, VITE_DISABLE_SW=1 so there
+# is no offline service worker caching a stale shell, and OPENREEL_LOCAL_FONTS=1 so the
+# fifty-odd Google font families come from public/fonts/ in the bundle rather than from
+# fonts.googleapis.com. The last one costs nothing - public/ is copied into dist whatever
+# happens, so those woff2 files were already in the zip - and it is what makes the editor
+# work on a box with no route to the internet, which is the whole premise of a bundle that
+# is fetched once and pinned. Deliberately NOT OPENREEL_DESKTOP=1, which also implies local
+# fonts: that one replaces @ffmpeg/core with an empty module, and the Clip Studio embed
+# renders its timeline to MP4 in the browser with exactly that.
 
 name: Clip Studio bundle
 
@@ -56,6 +63,7 @@ jobs:
         env:
           OPENREEL_BASE: "/edit/"
           VITE_DISABLE_SW: "1"
+          OPENREEL_LOCAL_FONTS: "1"
         run: pnpm --filter @openreel/web build
 
       - name: Zip the bundle and hash it
@@ -73,6 +81,18 @@ jobs:
           echo "bytes=$(stat -c%s "${zip}")" >> "$GITHUB_OUTPUT"
           echo "sha256=$(cut -d' ' -f1 SHA256SUMS)" >> "$GITHUB_OUTPUT"
           cat SHA256SUMS
+
+      # The one thing the pin cannot check, because it is about what the file SAYS rather
+      # than which file it is: a bundle that still asks the network for its fonts.
+      - name: The bundle must not reach for fonts.googleapis.com
+        run: |
+          set -euo pipefail
+          if grep -q "fonts.googleapis.com" apps/web/dist/index.html; then
+            echo "index.html still links fonts.googleapis.com - OPENREEL_LOCAL_FONTS did not take" >&2
+            exit 1
+          fi
+          test -f apps/web/dist/fonts/google-fonts.css
+          grep -o '<link href="[^"]*google-fonts.css"' apps/web/dist/index.html
 
       - name: Create the release
         env:
