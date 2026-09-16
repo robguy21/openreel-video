@@ -1,0 +1,96 @@
+# Build the web app as a static bundle for Clip Studio and attach it to a GitHub Release.
+#
+# Clip Studio (https://github.com/robguy21/clip-studio) serves this bundle from
+# `editor/dist` under `/edit/`, and `editor/editor.toml` there pins the tag, the asset URL,
+# the byte count and the sha256 of the zip this workflow produces. `setup editor` fetches
+# it, so a box with no Node and no pnpm still gets the editor. The local pnpm build
+# (`editor/build.ps1`) stays as the developer path and produces the same thing.
+#
+# To cut a bundle: tag a commit on `clip-studio` as `clip-studio-v<n>` and push the tag.
+# The tag pattern is deliberately NOT `v*`, which is upstream's desktop release workflow
+# (.github/workflows/release.yml) - the two must never fire on one tag.
+#
+# The build mirrors Clip Studio's editor/build.ps1 exactly: OPENREEL_BASE=/edit/ so vite
+# writes asset URLs under the sub-path the studio mounts it at, and VITE_DISABLE_SW=1 so
+# there is no offline service worker caching a stale shell.
+
+name: Clip Studio bundle
+
+on:
+  push:
+    tags: ["clip-studio-v*"]
+
+concurrency:
+  group: clip-studio-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: Build and release the /edit bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same setup as ci.yml: pnpm from packageManager in package.json, node 22, pnpm cache.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # packages/core/src/wasm/*/build/*.wasm are gitignored and imported with
+      # `new URL("./build/x.wasm", import.meta.url)`, so vite cannot resolve them unless
+      # AssemblyScript has run first. `pnpm build` does this for you; the web filter alone
+      # does not, which is why this is a step of its own.
+      - name: Build the AssemblyScript wasm modules
+        run: pnpm build:wasm
+
+      - name: Build the web app for /edit/
+        env:
+          OPENREEL_BASE: "/edit/"
+          VITE_DISABLE_SW: "1"
+        run: pnpm --filter @openreel/web build
+
+      - name: Zip the bundle and hash it
+        id: pack
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          zip="openreel-clip-studio-${tag}.zip"
+          # -X: no extra timestamps/uids, so the same tree zips to the same bytes.
+          (cd apps/web/dist && zip -qrX "${GITHUB_WORKSPACE}/${zip}" .)
+          sha256sum "${zip}" > SHA256SUMS
+          echo "zip=${zip}" >> "$GITHUB_OUTPUT"
+          echo "bytes=$(stat -c%s "${zip}")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d' ' -f1 SHA256SUMS)" >> "$GITHUB_OUTPUT"
+          cat SHA256SUMS
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          notes=$(printf '%s\n' \
+            "The Clip Studio editor bundle: \`apps/web/dist\` built with \`OPENREEL_BASE=/edit/ VITE_DISABLE_SW=1\`." \
+            "" \
+            "Pin it in Clip Studio's \`editor/editor.toml\`:" \
+            "" \
+            '```toml' \
+            "tag = \"${tag}\"" \
+            "url = \"https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${{ steps.pack.outputs.zip }}\"" \
+            "bytes = ${{ steps.pack.outputs.bytes }}" \
+            "sha256 = \"${{ steps.pack.outputs.sha256 }}\"" \
+            '```')
+          gh release create "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Clip Studio editor bundle ${tag}" \
+            --notes "${notes}" \
+            "${{ steps.pack.outputs.zip }}" SHA256SUMS
