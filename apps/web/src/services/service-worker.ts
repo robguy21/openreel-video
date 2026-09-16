@@ -61,8 +61,9 @@ class ServiceWorkerManager {
     }
 
     try {
-      const registration = await navigator.serviceWorker.register("/sw.js", {
-        scope: "/",
+      const base = import.meta.env.BASE_URL || "/";
+      const registration = await navigator.serviceWorker.register(`${base}sw.js`, {
+        scope: base,
       });
 
       this.registration = registration;
@@ -303,6 +304,11 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
   }
   // Only register in production or if explicitly enabled
   if (import.meta.env.DEV && !import.meta.env.VITE_ENABLE_SW) {
+    return null;
+  }
+  // Builds served by Clip Studio set this: same-machine, no offline need, and a stale
+  // cached shell after a rebuild would be the only thing the worker could add.
+  if (import.meta.env.VITE_DISABLE_SW === "1") {
     return null;
   }
 

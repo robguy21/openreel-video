@@ -37,6 +37,10 @@ const ACTION_DESCRIPTIONS: Record<
   "clip/setBlendOpacity": () => "Adjust blend opacity",
   "clip/setEmphasisAnimation": () => "Set emphasis animation",
   "clip/setColorGrading": () => "Color grading",
+  "clip/setMetadata": (params) =>
+    (params.metadata as Record<string, unknown> | undefined)?.moment
+      ? "Edit moment"
+      : "Edit clip metadata",
   "track/add": (params) => `Add ${params.trackType} track`,
   "track/duplicate": () => "Duplicate track",
   "track/remove": () => "Remove track",

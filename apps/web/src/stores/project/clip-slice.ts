@@ -1,8 +1,29 @@
 import { v4 as uuidv4 } from "uuid";
 import type { StoreApi } from "zustand";
-import type { Action, ActionResult } from "@openreel/core";
+import type {
+  Action,
+  ActionResult,
+  ClipMetadata,
+  MomentKind,
+  Track,
+} from "@openreel/core";
+import {
+  createMoment,
+  findMomentOverlap,
+  MOMENT_LANE_NAMES,
+  MOMENT_MEDIA_PREFIX,
+  MOMENT_RULE_MESSAGES,
+  momentLaneRole,
+  momentTrackRole,
+} from "@openreel/core";
+import { toast } from "../notification-store";
 import type { ProjectState } from "../project-store";
 import { calculateTimelineDuration } from "./index";
+import { useTimelineStore } from "../timeline-store";
+import { useUIStore } from "../ui-store";
+
+/** Default length of a freshly added moment, in seconds. */
+export const DEFAULT_MOMENT_DURATION = 5;
 
 type Get = StoreApi<ProjectState>["getState"];
 type Set = StoreApi<ProjectState>["setState"];
@@ -24,6 +45,8 @@ export type ClipSlice = Pick<
   | "rollEdit"
   | "trimToPlayhead"
   | "getClip"
+  | "setClipMetadata"
+  | "addMoment"
 >;
 
 export function createClipSlice(set: Set, get: Get): ClipSlice {
@@ -44,6 +67,108 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
       return result;
     },
 
+    setClipMetadata: async (
+      clipId: string,
+      metadata: Partial<ClipMetadata>,
+    ) => {
+      const { project, actionExecutor } = get();
+      const projectCopy = structuredClone(project);
+      const action: Action = {
+        type: "clip/setMetadata",
+        id: uuidv4(),
+        timestamp: Date.now(),
+        params: { clipId, metadata },
+      };
+      const result = await actionExecutor.execute(action, projectCopy);
+      if (result.success) {
+        set({ project: { ...projectCopy, modifiedAt: Date.now() } });
+      }
+      return result;
+    },
+
+    addMoment: async (kind: MomentKind, startTime?: number, trackId?: string) => {
+      const { project, addTrack } = get();
+      // Catalogues live on their own lane so they may coincide with the rest.
+      const lane = momentTrackRole(kind);
+      const isLane = (t: Track) =>
+        t.type === "moments" && momentLaneRole(t) === lane;
+      let momentTrack = trackId
+        ? project.timeline.tracks.find((t) => t.id === trackId)
+        : project.timeline.tracks.find(isLane);
+
+      if (!momentTrack) {
+        const trackResult = await addTrack("moments", undefined, {
+          name: MOMENT_LANE_NAMES[lane],
+          role: lane,
+        });
+        if (!trackResult.success) return trackResult;
+        momentTrack = get().project.timeline.tracks.find(isLane);
+      }
+      if (!momentTrack) {
+        return {
+          success: false,
+          error: {
+            code: "TRACK_NOT_FOUND" as const,
+            message: "Could not find a moments track",
+          },
+        };
+      }
+
+      const clipId = uuidv4();
+      const moment = createMoment(kind);
+      const clipStartTime = Math.max(
+        0,
+        startTime ?? useTimelineStore.getState().playheadPosition,
+      );
+      const { project: currentProject, actionExecutor } = get();
+      const liveTrack = currentProject.timeline.tracks.find(
+        (t) => t.id === momentTrack.id,
+      );
+      if (
+        liveTrack &&
+        findMomentOverlap(liveTrack.clips, {
+          startTime: clipStartTime,
+          duration: DEFAULT_MOMENT_DURATION,
+        })
+      ) {
+        toast.error(
+          MOMENT_RULE_MESSAGES.NO_OVERLAP,
+          "Move the playhead to a free spot",
+        );
+        return {
+          success: false,
+          error: {
+            code: "OVERLAP_DETECTED" as const,
+            message: MOMENT_RULE_MESSAGES.NO_OVERLAP,
+          },
+        };
+      }
+      const projectCopy = structuredClone(currentProject);
+      const action: Action = {
+        type: "clip/add",
+        id: uuidv4(),
+        timestamp: Date.now(),
+        params: {
+          trackId: momentTrack.id,
+          mediaId: `${MOMENT_MEDIA_PREFIX}${clipId}`,
+          startTime: clipStartTime,
+          clipId,
+          duration: DEFAULT_MOMENT_DURATION,
+          inPoint: 0,
+          outPoint: DEFAULT_MOMENT_DURATION,
+          metadata: { moment },
+        } as Action["params"],
+      };
+      const result = await actionExecutor.execute(action, projectCopy);
+      if (result.success) {
+        set({ project: { ...projectCopy, modifiedAt: Date.now() } });
+        useUIStore
+          .getState()
+          .select({ type: "clip", id: clipId, trackId: momentTrack.id });
+      }
+      return { ...result, actionId: clipId };
+    },
+
     addClipToNewTrack: async (mediaId: string, startTime?: number) => {
       const { project, addTrack, getMediaItem } = get();
       const mediaItem = getMediaItem(mediaId);
@@ -57,7 +182,7 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
         };
       }
 
-      let trackType: "video" | "audio" | "image" | "text" | "graphics";
+      let trackType: Track["type"];
       if (mediaItem.type === "video") trackType = "video";
       else if (mediaItem.type === "audio") trackType = "audio";
       else if (mediaItem.type === "image") trackType = "image";

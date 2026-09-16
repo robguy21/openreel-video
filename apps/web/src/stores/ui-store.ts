@@ -86,8 +86,10 @@ export interface UIState {
     y: number;
     items: ContextMenuItem[];
   } | null;
+  /** Preview-only mock of the live moment drawn over the canvas. */
+  showMomentOverlays: boolean;
   isDragging: boolean;
-  dragType: "clip" | "media" | "effect" | "keyframe" | null;
+  dragType: "clip" | "media" | "effect" | "keyframe" | "moment" | null;
   dragData: Record<string, unknown> | null;
   cropMode: boolean;
   cropClipId: string | null;
@@ -133,10 +135,11 @@ export interface UIState {
   showContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
   hideContextMenu: () => void;
   startDrag: (
-    type: "clip" | "media" | "effect" | "keyframe",
+    type: "clip" | "media" | "effect" | "keyframe" | "moment",
     data: Record<string, unknown>,
   ) => void;
   endDrag: () => void;
+  setShowMomentOverlays: (visible: boolean) => void;
   setCropMode: (enabled: boolean, clipId?: string) => void;
   setShowWelcomeScreen: (show: boolean) => void;
   setSkipWelcomeScreen: (skip: boolean) => void;
@@ -232,6 +235,7 @@ export const useUIStore = create<UIState>()(
 
         contextMenu: null,
 
+        showMomentOverlays: true,
         isDragging: false,
         dragType: null,
         dragData: null,
@@ -530,7 +534,7 @@ export const useUIStore = create<UIState>()(
         },
 
         startDrag: (
-          type: "clip" | "media" | "effect" | "keyframe",
+          type: "clip" | "media" | "effect" | "keyframe" | "moment",
           data: Record<string, unknown>,
         ) => {
           // Store drag metadata to enable drop target validation and visual feedback
@@ -540,6 +544,10 @@ export const useUIStore = create<UIState>()(
             dragType: type,
             dragData: data, // Arbitrary data passed from drag source to drop target
           });
+        },
+
+        setShowMomentOverlays: (visible: boolean) => {
+          set({ showMomentOverlays: visible });
         },
 
         endDrag: () => {
@@ -621,6 +629,7 @@ export const useUIStore = create<UIState>()(
           skipWelcomeScreen: state.skipWelcomeScreen,
           inspectorActiveTab: state.inspectorActiveTab,
           desktopPage: state.desktopPage,
+          showMomentOverlays: state.showMomentOverlays,
         }),
       },
     ),

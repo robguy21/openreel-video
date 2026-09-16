@@ -18,7 +18,8 @@ export type InspectorClipType =
   | "text"
   | "shape"
   | "svg"
-  | "sticker";
+  | "sticker"
+  | "moment";
 
 export interface InspectorTabDef {
   id: InspectorTabId;
@@ -45,6 +46,8 @@ const TABS_BY_CLIP_TYPE: Record<InspectorClipType, InspectorTabId[]> = {
   shape: ["transform", "style", "effects", "animate"],
   svg: ["transform", "style", "effects", "animate"],
   sticker: ["transform", "effects", "animate"],
+  // Moments are metadata only; MomentInspector renders its own sections.
+  moment: [],
 };
 
 export function getTabIdsForClipType(

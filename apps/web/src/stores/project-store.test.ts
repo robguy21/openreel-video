@@ -14,6 +14,15 @@ import {
   listGeneratedMotionShaders,
 } from "@openreel/core/motion/shaders";
 import { createEmptyProject } from "./project/project-helpers";
+import { calculateTimelineDuration } from "./project/project-helpers";
+import { getMoment, MOMENT_MEDIA_PREFIX } from "@openreel/core";
+import { useUIStore } from "./ui-store";
+import { useTimelineStore } from "./timeline-store";
+import {
+  dropMomentOnTimeline,
+  parseMomentDropPayload,
+  serializeMomentDropPayload,
+} from "../components/editor/timeline/moment-drop";
 
 const {
   mockEffectsBridge,
@@ -215,6 +224,167 @@ describe("ProjectStore", () => {
       const store = useProjectStore.getState();
       expect(store.canUndo()).toBe(false);
       expect(store.canRedo()).toBe(false);
+    });
+  });
+
+  describe("addMoment", () => {
+    it("creates a Moments track on first use and selects the new clip at the playhead", async () => {
+      useTimelineStore.getState().seekTo(7.5);
+      const store = useProjectStore.getState();
+      expect(
+        store.project.timeline.tracks.some((t) => t.type === "moments"),
+      ).toBe(false);
+
+      const result = await store.addMoment("promotion");
+      expect(result.success).toBe(true);
+
+      const { project } = useProjectStore.getState();
+      const momentTracks = project.timeline.tracks.filter(
+        (t) => t.type === "moments",
+      );
+      expect(momentTracks).toHaveLength(1);
+      expect(momentTracks[0].name).toBe("Moments");
+
+      const clip = momentTracks[0].clips[0];
+      expect(clip.id).toBe(result.actionId);
+      expect(clip.mediaId).toBe(`${MOMENT_MEDIA_PREFIX}${clip.id}`);
+      expect(clip.startTime).toBe(7.5);
+      expect(clip.duration).toBe(5);
+      expect(getMoment(clip)?.kind).toBe("promotion");
+
+      expect(useUIStore.getState().selectedItems).toEqual([
+        { type: "clip", id: clip.id, trackId: momentTracks[0].id },
+      ]);
+    });
+
+    it("reuses the existing Moments track and moments never extend the timeline duration", async () => {
+      const store = useProjectStore.getState();
+      await store.addMoment("quiz", 1);
+      await store.addMoment("product", 120);
+
+      const { project } = useProjectStore.getState();
+      const momentTracks = project.timeline.tracks.filter(
+        (t) => t.type === "moments",
+      );
+      expect(momentTracks).toHaveLength(1);
+      expect(momentTracks[0].clips).toHaveLength(2);
+      expect(calculateTimelineDuration(project)).toBe(0);
+    });
+
+    it("refuses to add a moment into an occupied window and never makes a second track", async () => {
+      const store = useProjectStore.getState();
+      const first = await store.addMoment("quiz", 2); // 2..7
+      expect(first.success).toBe(true);
+
+      const clash = await useProjectStore.getState().addMoment("product", 4);
+      expect(clash.success).toBe(false);
+      expect(clash.error?.code).toBe("OVERLAP_DETECTED");
+
+      const secondTrack = await useProjectStore
+        .getState()
+        .addTrack("moments", undefined, { name: "Moments" });
+      expect(secondTrack.success).toBe(false);
+
+      const { project } = useProjectStore.getState();
+      const momentTracks = project.timeline.tracks.filter((t) => t.type === "moments");
+      expect(momentTracks).toHaveLength(1);
+      expect(momentTracks[0].clips).toHaveLength(1);
+    });
+
+    it("keeps media off the Moments track via placeMediaClip", async () => {
+      const store = useProjectStore.getState();
+      await store.addMoment("quiz", 0);
+      const momentTrack = useProjectStore
+        .getState()
+        .project.timeline.tracks.find((t) => t.type === "moments")!;
+      useProjectStore.setState((state) => ({
+        project: {
+          ...state.project,
+          mediaLibrary: {
+            ...state.project.mediaLibrary,
+            items: [
+              ...state.project.mediaLibrary.items,
+              {
+                id: "media-x",
+                type: "video",
+                name: "x.mp4",
+                metadata: { duration: 3, width: 16, height: 9 },
+              } as unknown as MediaItem,
+            ],
+          },
+        },
+      }));
+      const placed = await useProjectStore
+        .getState()
+        .placeMediaClip("media-x", momentTrack.id, 30);
+      expect(placed.success).toBe(false);
+      expect(placed.error?.message).toBe("Only moments can go on the Moments track");
+      expect(
+        useProjectStore
+          .getState()
+          .project.timeline.tracks.find((t) => t.type === "moments")!.clips,
+      ).toHaveLength(1);
+    });
+
+    it("a moment dropped on the timeline lands on the Moments track at the drop time", async () => {
+      const dropped = await dropMomentOnTimeline("promotion", 12.5);
+      expect(dropped.success).toBe(true);
+      const track = useProjectStore
+        .getState()
+        .project.timeline.tracks.find((t) => t.type === "moments")!;
+      expect(track.clips).toHaveLength(1);
+      expect(track.clips[0].startTime).toBe(12.5);
+      expect(getMoment(track.clips[0])?.kind).toBe("promotion");
+
+      const clash = await dropMomentOnTimeline("quiz", 14); // 14..19 hits 12.5..17.5
+      expect(clash.success).toBe(false);
+      expect(clash.error?.code).toBe("OVERLAP_DETECTED");
+      expect(
+        useProjectStore
+          .getState()
+          .project.timeline.tracks.find((t) => t.type === "moments")!.clips,
+      ).toHaveLength(1);
+      expect(parseMomentDropPayload(serializeMomentDropPayload("product"))).toBe("product");
+      expect(parseMomentDropPayload(JSON.stringify({ mediaId: "m" }))).toBeNull();
+    });
+
+    it("addMoment('catalogue') gets its own lane and may coincide with a promotion", async () => {
+      const store = useProjectStore.getState();
+      const promo = await store.addMoment("promotion", 4);
+      expect(promo.success).toBe(true);
+      const cat = await useProjectStore.getState().addMoment("catalogue", 6); // overlaps 4..9
+      expect(cat.success).toBe(true);
+
+      const tracks = useProjectStore
+        .getState()
+        .project.timeline.tracks.filter((t) => t.type === "moments");
+      expect(tracks.map((t) => [t.role ?? "general", t.name, t.clips.length])).toEqual([
+        ["general", "Moments", 1],
+        ["catalogue", "Catalogue", 1],
+      ]);
+
+      const clash = await useProjectStore.getState().addMoment("catalogue", 8);
+      expect(clash.success).toBe(false);
+      expect(clash.error?.code).toBe("OVERLAP_DETECTED");
+    });
+
+    it("setClipMetadata updates a moment and undo restores it", async () => {
+      const store = useProjectStore.getState();
+      const added = await store.addMoment("quiz", 0);
+      const clipId = added.actionId!;
+      const original = getMoment(useProjectStore.getState().getClip(clipId))!;
+
+      await useProjectStore.getState().setClipMetadata(clipId, {
+        moment: { ...original, label: "Renamed" },
+      });
+      expect(
+        getMoment(useProjectStore.getState().getClip(clipId))?.label,
+      ).toBe("Renamed");
+
+      await useProjectStore.getState().undo();
+      expect(getMoment(useProjectStore.getState().getClip(clipId))).toEqual(
+        original,
+      );
     });
   });
 

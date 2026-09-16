@@ -1,3 +1,5 @@
+import { getMomentRuleMessage } from "../../../utils/moment-rules";
+import { dropMomentOnTimeline, parseMomentDropPayload } from "./moment-drop";
 import React, { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import type {
   Track,
@@ -136,6 +138,13 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
       setIsDragOver(true);
       try {
         const payload = JSON.parse(e.dataTransfer.getData("application/json"));
+        if (parseMomentDropPayload(payload)) {
+          // Moments always land on the Moments track, whichever lane is hovered.
+          setDropHint(
+            track.type === "moments" ? "Drop to add moment" : "Adds to Moments track",
+          );
+          return;
+        }
         const mediaId = typeof payload?.mediaId === "string" ? payload.mediaId : "";
         const mediaItem = mediaItems.find((item) => item.id === mediaId);
         const rect = laneRef.current?.getBoundingClientRect();
@@ -166,7 +175,7 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
         setDropHint("Drop to add clip");
       }
     },
-    [mediaItems, pixelsPerSecond, scrollX, track.id],
+    [mediaItems, pixelsPerSecond, scrollX, track.id, track.type],
   );
 
   const handleDragLeave = useCallback(() => {
@@ -207,8 +216,14 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
                 .getState()
                 .project.mediaLibrary.items.find(i => !beforeIds.has(i.id));
               if (newItem) {
-                await placeMediaClip(newItem.id, track.id, snapResult.time);
-                toast.success(`Added to ${track.name}`, file.name);
+                const placed = await placeMediaClip(
+                  newItem.id,
+                  track.id,
+                  snapResult.time,
+                );
+                const rule = getMomentRuleMessage(placed);
+                if (rule) toast.error("Can't place media", rule);
+                else toast.success(`Added to ${track.name}`, file.name);
               }
             }
           } catch (err) {
@@ -224,6 +239,23 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
         if (!rawData) return;
 
         const data = JSON.parse(rawData);
+        const momentKind = parseMomentDropPayload(data);
+        if (momentKind) {
+          const rect = laneRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const x = e.clientX - rect.left + scrollX;
+          const rawTime = Math.max(0, x / pixelsPerSecond);
+          const snapResult = calculateSnap(
+            rawTime,
+            "",
+            allTracks,
+            playheadPosition,
+            snapSettings,
+            pixelsPerSecond,
+          );
+          await dropMomentOnTimeline(momentKind, snapResult.time);
+          return;
+        }
         if (
           !data ||
           typeof data !== "object" ||

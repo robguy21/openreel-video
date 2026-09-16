@@ -5,6 +5,7 @@ import type {
   TextClip,
   SVGClip,
   StickerClip,
+  Track,
 } from "@openreel/core";
 import { getTrackItems } from "@openreel/core";
 import type { ProjectState } from "../project-store";
@@ -203,7 +204,7 @@ export function createHistorySlice(
             if (!trackHasClips) {
               const lastEntry = get().actionHistory.peekUndo();
               const lastAction = lastEntry?.action;
-              type TrackType = "video" | "audio" | "image" | "text" | "graphics";
+              type TrackType = Track["type"];
               const clipTypeToTrackType: Record<string, TrackType> = {
                 text: "text",
                 shape: "graphics",

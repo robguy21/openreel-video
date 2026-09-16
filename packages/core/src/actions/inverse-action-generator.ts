@@ -498,6 +498,23 @@ export class InverseActionGenerator {
         });
       }
 
+      case "clip/setMetadata": {
+        const clip = this.findClip(timeline, action.params.clipId);
+        if (!clip) return null;
+        // Restore every key the forward action touches to its previous value
+        // (undefined removes keys that did not exist before).
+        const previous: Record<string, unknown> = {};
+        for (const key of Object.keys(action.params.metadata)) {
+          previous[key] = clip.metadata
+            ? structuredClone(clip.metadata[key])
+            : undefined;
+        }
+        return this.createInverseAction(action, "clip/setMetadata", {
+          clipId: action.params.clipId,
+          metadata: previous,
+        });
+      }
+
       case "clip/closeGapBefore" as ClipAction["type"]: {
         const params = action.params as { clipId: string };
         const clip = this.findClip(timeline, params.clipId);

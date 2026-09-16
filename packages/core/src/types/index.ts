@@ -6,6 +6,7 @@ export * from "./template";
 export * from "./scriptable-template";
 export * from "./sound-library";
 export * from "./result";
+export * from "./moments";
 
 export type {
   Vector2D,

@@ -8,6 +8,7 @@ import type {
   Marker,
   Effect,
   Clip,
+  ClipMetadata,
   Track,
   Keyframe,
   ChromaKeySettings,
@@ -124,7 +125,7 @@ export type TrackAction =
   | {
       type: "track/add";
       params: {
-        trackType: "video" | "audio" | "image" | "text" | "graphics";
+        trackType: Track["type"];
         position?: number;
         /** Pre-assigned track ID. When omitted, the executor generates one. */
         trackId?: string;
@@ -165,9 +166,15 @@ export type ClipAction =
         /** Pre-assigned ID keeps grouped placement deterministic on redo. */
         clipId?: string;
         duration?: number;
+        /** Initial clip metadata (e.g. a OneLink moment payload). */
+        metadata?: ClipMetadata;
       };
     }
   | { type: "clip/remove"; params: { clipId: string } }
+  | {
+      type: "clip/setMetadata";
+      params: { clipId: string; metadata: Partial<ClipMetadata> };
+    }
   | {
       type: "clip/move";
       params: { clipId: string; startTime: number; trackId?: string };

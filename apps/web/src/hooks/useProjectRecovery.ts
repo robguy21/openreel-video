@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { autoSaveManager, type AutoSaveMetadata } from "../services/auto-save";
 import { clearAllStorage } from "../services/media-storage";
+import { useStudioStore } from "../services/studio/studio-session";
 import { useProjectStore } from "../stores/project-store";
 
 interface RecoveryState {
@@ -24,7 +25,12 @@ export function useProjectRecovery() {
         await autoSaveManager.initialize();
         const saves = await autoSaveManager.checkForRecovery();
 
-        if (saves.length > 0) {
+        // A Clip Studio session owns its project (the studio holds the saved edit), so an
+        // unrelated autosave from an earlier session must not offer to replace it.
+        const studioSession =
+          useStudioStore.getState().pid !== null || window.location.hash.startsWith("#/studio");
+
+        if (saves.length > 0 && !studioSession) {
           setState({
             isChecking: false,
             availableSaves: saves,

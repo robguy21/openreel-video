@@ -1,5 +1,5 @@
-import { Film, Volume2, Image, Type, Shapes, Layers } from "@/icons/lucide-compat";
-import type { Track } from "@openreel/core";
+import { Film, Volume2, Image, Type, Shapes, Layers, Zap, LayoutGrid } from "@/icons/lucide-compat";
+import type { MomentKind, Track } from "@openreel/core";
 import type {
   SnapPoint,
   SnapResult,
@@ -279,6 +279,23 @@ export const getTrackInfo = (track: Track, index: number): TrackInfo => {
         textColor: "text-green-400",
         bgLight: "bg-green-500/20",
       };
+    case "moments":
+      if (track.role === "catalogue") {
+        return {
+          label: `C${index + 1}`,
+          icon: LayoutGrid,
+          color: "bg-teal-500",
+          textColor: "text-teal-400",
+          bgLight: "bg-teal-500/20",
+        };
+      }
+      return {
+        label: `M${index + 1}`,
+        icon: Zap,
+        color: "bg-fuchsia-500",
+        textColor: "text-fuchsia-400",
+        bgLight: "bg-fuchsia-500/20",
+      };
     default:
       return {
         label: `?${index + 1}`,
@@ -290,8 +307,51 @@ export const getTrackInfo = (track: Track, index: number): TrackInfo => {
   }
 };
 
+/** Per-kind styling for OneLink moment clips (metadata-only clips). */
+export const getMomentClipStyle = (kind?: MomentKind): ClipStyle => {
+  switch (kind) {
+    case "quiz":
+      return {
+        bg: "bg-[linear-gradient(160deg,#c4b5fd,#6d28d9)]",
+        border: "border-transparent",
+        text: "text-white",
+        selectedText: "text-white",
+      };
+    case "promotion":
+      return {
+        bg: "bg-[linear-gradient(160deg,#f5a3e0,#be185d)]",
+        border: "border-transparent",
+        text: "text-white",
+        selectedText: "text-white",
+      };
+    case "product":
+      return {
+        bg: "bg-[linear-gradient(160deg,#fdba74,#c2410c)]",
+        border: "border-transparent",
+        text: "text-white",
+        selectedText: "text-white",
+      };
+    case "catalogue":
+      return {
+        bg: "bg-[linear-gradient(160deg,#5eead4,#0f766e)]",
+        border: "border-transparent",
+        text: "text-white",
+        selectedText: "text-white",
+      };
+    default:
+      return {
+        bg: "bg-[linear-gradient(160deg,#e879f9,#a21caf)]",
+        border: "border-transparent",
+        text: "text-white",
+        selectedText: "text-white",
+      };
+  }
+};
+
 export const getClipStyle = (trackType: string): ClipStyle => {
   switch (trackType) {
+    case "moments":
+      return getMomentClipStyle();
     case "video":
       return {
         bg: "bg-[linear-gradient(160deg,#bcd3e8,#5d7a93)]",

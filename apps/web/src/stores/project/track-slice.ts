@@ -3,6 +3,8 @@ import type { StoreApi } from "zustand";
 import type { Action, Project } from "@openreel/core";
 import { withUniversalTracksCapability } from "@openreel/core";
 import type { ProjectState } from "../project-store";
+import { toast } from "../notification-store";
+import { getMomentRuleMessage } from "../../utils/moment-rules";
 
 type Get = StoreApi<ProjectState>["getState"];
 type Set = StoreApi<ProjectState>["setState"];
@@ -36,6 +38,10 @@ export function createTrackSlice(set: Set, get: Get): TrackSlice {
         params: { trackType, position, ...options, trackId },
       };
       const result = await actionExecutor.execute(action, projectCopy);
+      if (!result.success) {
+        const rule = getMomentRuleMessage(result);
+        if (rule) toast.error("Can't add track", rule);
+      }
       if (result.success) {
         const finalProject: Project = {
           ...projectCopy,

@@ -5,6 +5,7 @@ import { useTimelineStore } from "../../stores/timeline-store";
 import { useUIStore } from "../../stores/ui-store";
 import { useEngineStore } from "../../stores/engine-store";
 import type { Transform, EditingTemplatePrimitive } from "@openreel/core";
+import { MOMENT_MEDIA_PREFIX } from "@openreel/core";
 import {
   ChromaKeyEngine,
   getMediaItemCapabilities,
@@ -52,6 +53,7 @@ import { EffectsTab } from "./inspector/tabs/EffectsTab";
 import { AiTab } from "./inspector/tabs/AiTab";
 import { TransitionInspector } from "./inspector/TransitionInspector";
 import { MultiClipInspector } from "./inspector/MultiClipInspector";
+import { MomentInspector } from "./inspector/MomentInspector";
 
 // Initialize engines as singletons
 const chromaKeyEngine = new ChromaKeyEngine({ width: 1920, height: 1080 });
@@ -649,6 +651,10 @@ export const InspectorPanel: React.FC = () => {
       return "text";
     }
 
+    if (selectedClip.mediaId.startsWith(MOMENT_MEDIA_PREFIX)) {
+      return "moment";
+    }
+
     if (selectedClip.mediaId.startsWith("shape-")) {
       return "shape";
     }
@@ -699,6 +705,7 @@ export const InspectorPanel: React.FC = () => {
   );
   const showAudioEffects =
     clipType === "audio" || selectedMediaCapabilities.audio;
+  const showMomentSection = clipType === "moment";
   const showTextSection = clipType === "text";
   const showShapeSection = clipType === "shape";
   const showSVGSection = clipType === "svg";
@@ -839,6 +846,10 @@ export const InspectorPanel: React.FC = () => {
       <div className="py-[18px] px-5">
         {selectedClipIds.length > 1 ? (
           <MultiClipInspector clipIds={selectedClipIds} />
+        ) : selectedClip && showMomentSection ? (
+          <InspectorTabErrorBoundary key={clipId}>
+            <MomentInspector clipId={clipId} />
+          </InspectorTabErrorBoundary>
         ) : selectedClip ? (
           <InspectorTabErrorBoundary key={clipId}>
             <div className="space-y-4">

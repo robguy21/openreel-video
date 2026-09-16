@@ -95,6 +95,7 @@ export function resolveTimelinePlacement(
     const candidate = project.timeline.tracks[index];
     if (
       !candidate.locked &&
+      candidate.type !== "moments" &&
       isStandardTrack(candidate) &&
       isTimelineIntervalClear(
         project,

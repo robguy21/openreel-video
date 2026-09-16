@@ -2,6 +2,8 @@ import { v4 as uuidv4 } from "uuid";
 import type { StoreApi } from "zustand";
 import type { Action, ActionResult } from "@openreel/core";
 import {
+  isMomentClip,
+  MOMENT_RULE_MESSAGES,
   resolveTimelineItem,
   resolveTimelinePlacement,
   withUniversalTracksCapability,
@@ -60,6 +62,13 @@ export function createTimelineItemSlice(
         (item) => item.id === mediaId,
       );
       if (!mediaItem) return failure("INVALID_PARAMS", "Media item not found");
+
+      const targetTrack = targetTrackId
+        ? project.timeline.tracks.find((track) => track.id === targetTrackId)
+        : undefined;
+      if (targetTrack?.type === "moments") {
+        return failure("INVALID_PARAMS", MOMENT_RULE_MESSAGES.ONLY_MOMENTS);
+      }
 
       const duration =
         mediaItem.metadata.duration > 0 ? mediaItem.metadata.duration : 5;
@@ -133,11 +142,22 @@ export function createTimelineItemSlice(
       }
 
       const requestedTrackId = targetTrackId ?? resolved.trackId;
+      const isMoment = resolved.kind === "media" && isMomentClip(resolved.item);
+      const requestedTrack = project.timeline.tracks.find(
+        (track) => track.id === requestedTrackId,
+      );
+      if (isMoment && requestedTrackId !== resolved.trackId) {
+        return failure("INVALID_PARAMS", MOMENT_RULE_MESSAGES.STAY_ON_TRACK);
+      }
+      if (!isMoment && requestedTrack?.type === "moments") {
+        return failure("INVALID_PARAMS", MOMENT_RULE_MESSAGES.ONLY_MOMENTS);
+      }
       const placement = resolveTimelinePlacement(project, {
         targetTrackId: requestedTrackId,
         startTime,
         duration: resolved.duration,
-        policy: targetTrackId ? "stack-above" : "gap",
+        // Moments never stack onto another row; they either fit or fail.
+        policy: targetTrackId && !isMoment ? "stack-above" : "gap",
         excludeItemIds: [itemId],
         newTrackId: uuidv4(),
       });
@@ -148,7 +168,12 @@ export function createTimelineItemSlice(
         if (placement.reason === "track-locked") {
           return failure("TRACK_LOCKED", "Destination track is locked");
         }
-        return failure("OVERLAP_DETECTED", "The destination interval is occupied");
+        return failure(
+          "OVERLAP_DETECTED",
+          isMoment
+            ? MOMENT_RULE_MESSAGES.NO_OVERLAP
+            : "The destination interval is occupied",
+        );
       }
 
       const actions: Action[] = [];

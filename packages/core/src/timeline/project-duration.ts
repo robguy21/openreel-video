@@ -15,7 +15,11 @@ export function calculateProjectDuration(project: Project): number {
     for (const item of items ?? []) maxEnd = Math.max(maxEnd, timedEnd(item));
   };
 
-  for (const track of project.timeline.tracks) include(track.clips);
+  for (const track of project.timeline.tracks) {
+    // Moments are metadata only; they never extend the authored duration.
+    if (track.type === "moments") continue;
+    include(track.clips);
+  }
   include(project.textClips);
   include(project.shapeClips);
   include(project.svgClips);

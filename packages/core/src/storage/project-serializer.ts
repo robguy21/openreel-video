@@ -371,7 +371,8 @@ export class ProjectSerializer {
                   clip.mediaId.startsWith("shape-") ||
                   clip.mediaId.startsWith("svg-") ||
                   clip.mediaId.startsWith("sticker-") ||
-                  clip.mediaId.startsWith("motion-"));
+                  clip.mediaId.startsWith("motion-") ||
+                  clip.mediaId.startsWith("moment-"));
               if (
                 clip.mediaId &&
                 !isVirtualClip &&

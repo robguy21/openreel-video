@@ -9,6 +9,7 @@ import { SharePage } from "./pages/SharePage";
 import { useUIStore } from "./stores/ui-store";
 import { useProjectStore } from "./stores/project-store";
 import { useRouter } from "./hooks/use-router";
+import { openStudioProject } from "./services/studio/studio-session";
 import { useProjectRecovery } from "./hooks/useProjectRecovery";
 import { useKieAIPoller } from "./hooks/useKieAIPoller";
 import { SOCIAL_MEDIA_PRESETS, type SocialMediaCategory } from "@openreel/core";
@@ -60,6 +61,16 @@ function App() {
 
     if (isMotionSurface) {
       hasHandledInitialRoute.current = true;
+    } else if (route === "studio") {
+      // Opened from Clip Studio: build or restore that project, then land in the editor.
+      hasHandledInitialRoute.current = true;
+      // The hash stays `#/studio?id=...` so a plain reload reopens the same project.
+      const pid = params.id;
+      if (pid) {
+        void openStudioProject(pid).catch(() => undefined);
+      } else {
+        navigate("welcome");
+      }
     } else if (route === "new") {
       hasHandledInitialRoute.current = true;
 
@@ -118,7 +129,7 @@ function App() {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "Escape" && route !== "editor") {
+      if (e.key === "Escape" && route !== "editor" && route !== "studio") {
         navigate("editor");
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {

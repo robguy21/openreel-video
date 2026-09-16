@@ -1191,6 +1191,8 @@ export class ExportEngine {
   private calculateTimelineDuration(timeline: Project["timeline"]): number {
     let maxEndTime = 0;
     for (const track of timeline.tracks) {
+      // Moments are metadata only and must never extend a render.
+      if (track.type === "moments") continue;
       for (const clip of track.clips) {
         const endTime = clip.startTime + clip.duration;
         if (endTime > maxEndTime) {

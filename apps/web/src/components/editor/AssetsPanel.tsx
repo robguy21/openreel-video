@@ -23,6 +23,7 @@ import {
   EffectsPanel,
   TransitionsPanel,
 } from "./panels/EffectsTransitionsPanel";
+import { MomentsPanel } from "./panels/MomentsPanel";
 import { useTtsAudioStore } from "../../stores/tts-store";
 import { toast } from "../../stores/notification-store";
 import { saveFileHandle, saveDirectoryHandle } from "../../services/media-storage";
@@ -57,7 +58,8 @@ type AssetsTab =
   | "transitions"
   | "ai"
   | "recipes"
-  | "templates";
+  | "templates"
+  | "moments";
 
 const ASSETS_TABS: ReadonlyArray<{
   value: AssetsTab;
@@ -98,6 +100,11 @@ const ASSETS_TABS: ReadonlyArray<{
     value: "recipes",
     label: "Recipes",
     description: "Apply clip-scoped looks, overlays, and text stacks.",
+  },
+  {
+    value: "moments",
+    label: "Moments",
+    description: "OneLink Moments: timed quiz, promotion, and product events.",
   },
   {
     value: "templates",
@@ -199,6 +206,7 @@ const TAB_ICONS: Record<AssetsTab, React.ElementType> = {
   ai: Sparkles,
   recipes: Wand2,
   templates: LayoutTemplate,
+  moments: Sparkles,
 };
 
 const PanelIconButton: React.FC<{
@@ -1490,6 +1498,12 @@ export const AssetsPanel: React.FC = () => {
         return (
           <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-bg-1">
             <TransitionsPanel />
+          </div>
+        );
+      case "moments":
+        return (
+          <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-bg-1">
+            <MomentsPanel />
           </div>
         );
       case "ai":

@@ -16,6 +16,17 @@ import type {
   MarkerAction,
 } from "../types/actions";
 import type { Project, Timeline, Track, Clip } from "../types";
+import {
+  findMomentOverlap,
+  getMomentKind,
+  isMomentMediaId,
+  MOMENT_MEDIA_PREFIX,
+  MOMENT_RULE_MESSAGES,
+  momentLaneRole,
+  momentsOverlap,
+  momentTrackRole,
+} from "../types/moments";
+import type { ClipMetadata } from "../types/timeline";
 import { getActionHandler } from "./registry";
 
 export class ActionValidator {
@@ -240,16 +251,35 @@ export class ActionValidator {
     switch (action.type) {
       case "track/add":
         if (
-          !["video", "audio", "image", "text", "graphics"].includes(
+          !["video", "audio", "image", "text", "graphics", "moments"].includes(
             action.params.trackType,
           )
         ) {
           errors.push({
             code: "INVALID_PARAMS",
             message:
-              "Track type must be 'video', 'audio', 'image', 'text', or 'graphics'",
+              "Track type must be 'video', 'audio', 'image', 'text', 'graphics', or 'moments'",
             path: "params.trackType",
           });
+        }
+        if (action.params.trackType === "moments") {
+          // Exactly one moments track per lane (general / catalogue).
+          const lane = momentLaneRole({ role: action.params.role });
+          if (
+            timeline.tracks.some(
+              (track) =>
+                track.type === "moments" && momentLaneRole(track) === lane,
+            )
+          ) {
+            errors.push({
+              code: "INVALID_PARAMS",
+              message:
+                lane === "catalogue"
+                  ? MOMENT_RULE_MESSAGES.ONLY_ONE_CATALOGUE_TRACK
+                  : MOMENT_RULE_MESSAGES.ONLY_ONE_TRACK,
+              path: "params.trackType",
+            });
+          }
         }
         if (
           action.params.position !== undefined &&
@@ -278,6 +308,20 @@ export class ActionValidator {
           errors.push({
             code: "TRACK_NOT_FOUND",
             message: `Track with ID ${action.params.sourceTrackId} not found`,
+            path: "params.sourceTrackId",
+          });
+        } else if (
+          this.findTrack(timeline, action.params.sourceTrackId)?.type ===
+          "moments"
+        ) {
+          errors.push({
+            code: "INVALID_PARAMS",
+            message:
+              momentLaneRole(
+                this.findTrack(timeline, action.params.sourceTrackId),
+              ) === "catalogue"
+                ? MOMENT_RULE_MESSAGES.ONLY_ONE_CATALOGUE_TRACK
+                : MOMENT_RULE_MESSAGES.ONLY_ONE_TRACK,
             path: "params.sourceTrackId",
           });
         }
@@ -527,9 +571,11 @@ export class ActionValidator {
             path: "params.mediaId",
           });
         } else {
-          const mediaExists = project.mediaLibrary.items.some(
-            (item) => item.id === action.params.mediaId,
-          );
+          const mediaExists =
+            action.params.mediaId.startsWith(MOMENT_MEDIA_PREFIX) ||
+            project.mediaLibrary.items.some(
+              (item) => item.id === action.params.mediaId,
+            );
           if (!mediaExists) {
             errors.push({
               code: "MEDIA_NOT_FOUND",
@@ -758,6 +804,17 @@ export class ActionValidator {
       case "clip/setBlendOpacity":
       case "clip/setEmphasisAnimation":
       case "clip/setColorGrading":
+      case "clip/setMetadata":
+        if (
+          action.type === "clip/setMetadata" &&
+          (!action.params.metadata || typeof action.params.metadata !== "object")
+        ) {
+          errors.push({
+            code: "INVALID_PARAMS",
+            message: "Metadata must be an object",
+            path: "params.metadata",
+          });
+        }
         if (!action.params.clipId || typeof action.params.clipId !== "string") {
           errors.push({
             code: "INVALID_PARAMS",
@@ -784,6 +841,10 @@ export class ActionValidator {
           }
         }
         break;
+    }
+
+    if (errors.length === 0) {
+      errors.push(...this.validateMomentRules(action, timeline));
     }
 
     return errors;
@@ -1408,6 +1469,205 @@ export class ActionValidator {
             path: "params.style",
           });
         }
+        break;
+    }
+
+    return errors;
+  }
+
+  /**
+   * Moments track invariants, enforced for every clip action so no path
+   * (drag, inspector, paste, duplicate, undo) can break them:
+   * - only moment clips live on a moments track, and moments live nowhere else;
+   * - two moments never overlap in time.
+   */
+  private validateMomentRules(
+    action: ClipAction,
+    timeline: Timeline,
+  ): ValidationError[] {
+    const errors: ValidationError[] = [];
+    const push = (
+      code: ValidationError["code"],
+      message: string,
+      path: string,
+    ) => errors.push({ code, message, path });
+    const overlapError = (path: string) =>
+      push("OVERLAP_DETECTED", MOMENT_RULE_MESSAGES.NO_OVERLAP, path);
+    const trackOf = (trackId: string) => this.findTrack(timeline, trackId);
+    /** Catalogue moments live on the catalogue lane, every other kind on the general lane. */
+    const laneMismatch = (
+      track: Track,
+      clipLike: { mediaId: string; metadata?: ClipMetadata },
+    ): boolean => {
+      const kind = getMomentKind(clipLike);
+      return kind !== null && momentTrackRole(kind) !== momentLaneRole(track);
+    };
+
+    switch (action.type) {
+      case "clip/add": {
+        const { trackId, mediaId, startTime, sourceClip, clipId } =
+          action.params;
+        const track = trackOf(trackId);
+        if (!track) break;
+        const isMoment = isMomentMediaId(sourceClip?.mediaId ?? mediaId);
+        if (track.type === "moments" && !isMoment) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.ONLY_MOMENTS, "params.trackId");
+        } else if (track.type !== "moments" && isMoment) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.STAY_ON_TRACK, "params.trackId");
+        } else if (
+          track.type === "moments" &&
+          laneMismatch(
+            track,
+            sourceClip ?? { mediaId, metadata: action.params.metadata },
+          )
+        ) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.OWN_TRACK, "params.trackId");
+        } else if (track.type === "moments") {
+          const duration = action.params.duration ?? sourceClip?.duration ?? 5;
+          if (
+            findMomentOverlap(track.clips, { id: clipId, startTime, duration })
+          ) {
+            overlapError("params.startTime");
+          }
+        }
+        break;
+      }
+
+      case "clip/move": {
+        const clip = this.findClip(timeline, action.params.clipId);
+        if (!clip) break;
+        const sourceTrack = trackOf(clip.trackId);
+        const targetTrackId = action.params.trackId ?? clip.trackId;
+        const targetTrack = trackOf(targetTrackId);
+        if (sourceTrack?.type === "moments") {
+          if (targetTrackId !== clip.trackId) {
+            push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.STAY_ON_TRACK, "params.trackId");
+          } else if (
+            findMomentOverlap(sourceTrack.clips, {
+              id: clip.id,
+              startTime: action.params.startTime,
+              duration: clip.duration,
+            })
+          ) {
+            overlapError("params.startTime");
+          }
+        } else if (targetTrack?.type === "moments") {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.ONLY_MOMENTS, "params.trackId");
+        }
+        break;
+      }
+
+      case "clip/trim": {
+        const clip = this.findClip(timeline, action.params.clipId);
+        const track = clip ? trackOf(clip.trackId) : null;
+        if (!clip || track?.type !== "moments") break;
+        const inPoint = action.params.inPoint ?? clip.inPoint;
+        const outPoint = action.params.outPoint ?? clip.outPoint;
+        if (
+          findMomentOverlap(track.clips, {
+            id: clip.id,
+            startTime: clip.startTime,
+            duration: outPoint - inPoint,
+          })
+        ) {
+          overlapError("params");
+        }
+        break;
+      }
+
+      case "clip/trimToPlayhead": {
+        const clip = this.findClip(timeline, action.params.clipId);
+        const track = clip ? trackOf(clip.trackId) : null;
+        if (!clip || track?.type !== "moments") break;
+        const { playheadTime, trimStart } = action.params;
+        const startTime = trimStart ? playheadTime : clip.startTime;
+        const end = trimStart ? clip.startTime + clip.duration : playheadTime;
+        if (
+          findMomentOverlap(track.clips, {
+            id: clip.id,
+            startTime,
+            duration: end - startTime,
+          })
+        ) {
+          overlapError("params.playheadTime");
+        }
+        break;
+      }
+
+      case "clip/slide": {
+        const clip = this.findClip(timeline, action.params.clipId);
+        const track = clip ? trackOf(clip.trackId) : null;
+        if (!clip || track?.type !== "moments") break;
+        const { delta, prevClipId, nextClipId } = action.params;
+        const simulated = track.clips.map((c) => {
+          if (c.id === clip.id) {
+            return { ...c, startTime: Math.max(0, c.startTime + delta) };
+          }
+          if (c.id === prevClipId && delta > 0) {
+            return { ...c, duration: c.duration + delta };
+          }
+          if (c.id === nextClipId && delta < 0) {
+            return {
+              ...c,
+              startTime: c.startTime + delta,
+              duration: c.duration - delta,
+            };
+          }
+          return c;
+        });
+        if (momentsOverlap(simulated)) overlapError("params.delta");
+        break;
+      }
+
+      case "clip/restore": {
+        const restored = action.params.clip;
+        const track = trackOf(restored.trackId);
+        if (!track) break;
+        const isMoment = isMomentMediaId(restored.mediaId);
+        if (track.type === "moments" && !isMoment) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.ONLY_MOMENTS, "params.clip");
+        } else if (track.type !== "moments" && isMoment) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.STAY_ON_TRACK, "params.clip");
+        } else if (track.type === "moments" && laneMismatch(track, restored)) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.OWN_TRACK, "params.clip");
+        } else if (
+          track.type === "moments" &&
+          findMomentOverlap(track.clips, restored)
+        ) {
+          overlapError("params.clip");
+        }
+        break;
+      }
+
+      case "clip/rippleRestore": {
+        const restored = action.params.clip;
+        const track = trackOf(restored.trackId);
+        if (!track || track.type !== "moments") break;
+        if (!isMomentMediaId(restored.mediaId)) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.ONLY_MOMENTS, "params.clip");
+          break;
+        }
+        if (laneMismatch(track, restored)) {
+          push("INVALID_PARAMS", MOMENT_RULE_MESSAGES.OWN_TRACK, "params.clip");
+          break;
+        }
+        const simulated = track.clips
+          .filter((c) => c.id !== restored.id)
+          .map((c) => {
+            const affected = action.params.affectedClips.find(
+              (entry) => entry.id === c.id,
+            );
+            return affected
+              ? { ...c, startTime: affected.originalStartTime }
+              : c;
+          });
+        if (momentsOverlap([...simulated, restored])) {
+          overlapError("params.clip");
+        }
+        break;
+      }
+
+      default:
         break;
     }
 

@@ -4,6 +4,8 @@ import type {
   MediaItem,
   Track,
   Clip,
+  ClipMetadata,
+  MomentKind,
   AutomationPoint,
   Transition,
   Action,
@@ -65,7 +67,7 @@ export interface ClipHistoryEntry {
   /** After-edit snapshot, present only for op === "update" (used by redo). */
   afterData?: ShapeClip | TextClip | SVGClip | StickerClip;
   hadEmptyTrackUndo?: boolean;
-  trackType?: "video" | "audio" | "image" | "text" | "graphics";
+  trackType?: Track["type"];
 }
 
 export interface EditingTemplateTrackSnapshot {
@@ -141,7 +143,7 @@ export interface ProjectState {
   getMediaItem: (mediaId: string) => MediaItem | undefined;
 
   addTrack: (
-    trackType: "video" | "audio" | "image" | "text" | "graphics",
+    trackType: Track["type"],
     position?: number,
     options?: {
       mode?: "standard";
@@ -201,6 +203,20 @@ export interface ProjectState {
     trimStart: boolean,
   ) => Promise<ActionResult>;
   getClip: (clipId: string) => Clip | undefined;
+  /** Shallow-merge metadata into a clip (undoable). */
+  setClipMetadata: (
+    clipId: string,
+    metadata: Partial<ClipMetadata>,
+  ) => Promise<ActionResult>;
+  /**
+   * Add a OneLink moment on the first "moments" track (created on demand).
+   * startTime defaults to the playhead; the new clip is selected.
+   */
+  addMoment: (
+    kind: MomentKind,
+    startTime?: number,
+    trackId?: string,
+  ) => Promise<ActionResult>;
   addClipTransition: (transition: Transition) => Promise<Transition | null>;
   updateClipTransition: (
     transitionId: string,

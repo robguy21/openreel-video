@@ -25,6 +25,12 @@ import { useExportRunner, extForFormat, exportFilename, writeBlobToWritable } fr
 import { ScreenRecorder } from "./ScreenRecorder";
 import { HistoryPanel } from "./inspector/HistoryPanel";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { StudioBar } from "./StudioBar";
+import {
+  useStudioStore,
+  exportToStudio,
+  dismissStudioError,
+} from "../../services/studio/studio-session";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import {
   WorkspaceModeTabs,
@@ -93,7 +99,10 @@ export const Toolbar: React.FC = () => {
         return;
       }
       setDesktopPage("edit");
-      navigate("editor");
+      // Keep the Clip Studio project in the hash so a reload still reopens it.
+      const studioPid = useStudioStore.getState().pid;
+      if (studioPid) navigate("studio", { id: studioPid });
+      else navigate("editor");
     },
     [navigate, setDesktopPage],
   );
@@ -131,6 +140,28 @@ export const Toolbar: React.FC = () => {
 
   const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(null);
   const [exportEstimates, setExportEstimates] = useState<Map<string, TimeEstimate>>(new Map());
+
+  // Inside a Clip Studio session the primary Export sends the render to the
+  // studio; the dropdown keeps the local-file presets.
+  const studioPid = useStudioStore((s) => s.pid);
+  const studioStatus = useStudioStore((s) => s.status);
+  const studioMessage = useStudioStore((s) => s.message);
+  const studioProgress = useStudioStore((s) => s.progress);
+  const studioError = useStudioStore((s) => s.error);
+  const studioLastExportAt = useStudioStore((s) => s.lastExportAt);
+  const isStudioSession = studioPid !== null;
+  const isStudioExporting = isStudioSession && studioStatus === "exporting";
+  const [studioSavedVisible, setStudioSavedVisible] = useState(false);
+  useEffect(() => {
+    if (!studioLastExportAt) return;
+    setStudioSavedVisible(true);
+    const timer = window.setTimeout(() => setStudioSavedVisible(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [studioLastExportAt]);
+  const handleExportToStudio = useCallback(() => {
+    setIsExportOpen(false);
+    void exportToStudio();
+  }, []);
 
   useEffect(() => {
     setGlobalExportState({
@@ -422,6 +453,7 @@ export const Toolbar: React.FC = () => {
         onSelectMode={handleWorkspaceModeSelect}
         className="shrink-0"
       />
+      <StudioBar />
 
       {/* ─── Center: project name ─────────────────────────────── */}
       <div className="flex flex-1 min-w-0 items-center justify-center gap-1.5">
@@ -448,7 +480,40 @@ export const Toolbar: React.FC = () => {
       {/* ─── Right: export only ───────────────────────────────── */}
       <div className="flex items-center justify-end shrink-0">
         {/* Export */}
-        {exportState.isExporting ? (
+        {isStudioExporting ? (
+          <div
+            className="flex items-center gap-1.5 rounded-[8px] bg-bg-3 px-[18px] py-[9px] text-[13px] font-semibold text-fg-2"
+            title={studioMessage}
+            aria-live="polite"
+          >
+            <Icon name="square.and.arrow.up" size={13} ariaHidden />
+            <span className="max-w-[160px] truncate">
+              {studioMessage || "Exporting to Studio…"}
+            </span>
+            {studioProgress > 0 && studioProgress < 1
+              ? `${Math.round(studioProgress * 100)}%`
+              : null}
+          </div>
+        ) : isStudioSession && studioError && !exportState.isExporting ? (
+          <button
+            type="button"
+            onClick={dismissStudioError}
+            className="flex max-w-[180px] items-center gap-1.5 truncate rounded-[8px] bg-destructive px-[18px] py-[9px] text-[13px] font-semibold text-destructive-foreground"
+            title={studioError}
+          >
+            <span className="truncate">{studioError}</span>
+            <Icon name="xmark" size={11} ariaHidden />
+          </button>
+        ) : isStudioSession && studioSavedVisible && !exportState.isExporting ? (
+          <button
+            type="button"
+            disabled
+            className="flex items-center gap-1.5 rounded-[8px] bg-bg-3 px-[18px] py-[9px] text-[13px] font-semibold text-fg-2"
+          >
+            <Icon name="checkmark" size={13} ariaHidden />
+            Saved!
+          </button>
+        ) : exportState.isExporting ? (
           <button
             type="button"
             onClick={handleCancelExport}
@@ -480,10 +545,17 @@ export const Toolbar: React.FC = () => {
           <div className="flex items-stretch">
             <button
               type="button"
-              onClick={() => handleExport("mp4")}
+              onClick={() =>
+                isStudioSession ? handleExportToStudio() : handleExport("mp4")
+              }
               className="rounded-l-[8px] rounded-r-none bg-accent px-[18px] py-[9px] text-[13px] font-semibold text-white"
+              title={
+                isStudioSession
+                  ? "Render the timeline as MP4 and store it in the Clip Studio project's exports"
+                  : undefined
+              }
             >
-              Export
+              {isStudioSession ? "Export to Studio" : "Export"}
             </button>
             <DropdownMenu
               isMenuOpen={isExportOpen}
@@ -520,6 +592,31 @@ export const Toolbar: React.FC = () => {
               menuWidth={288}
             >
               <div className="space-y-1 max-h-[400px] overflow-y-auto">
+                {isStudioSession && (
+                  <>
+                    <DropdownMenuItem
+                      icon={<Icon name="square.and.arrow.up" size={18} ariaHidden />}
+                      label={
+                        <div className="flex items-center gap-2">
+                          <Text type="label" weight="bold" className="text-accent">
+                            Export to Studio
+                          </Text>
+                          <Text type="supporting" className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
+                            default
+                          </Text>
+                        </div>
+                      }
+                      description={
+                        <Text type="supporting" color="secondary" display="block">
+                          {`${projectRes} H.264 - saved into the Clip Studio project`}
+                        </Text>
+                      }
+                      className="bg-accent-soft"
+                      onClick={handleExportToStudio}
+                    />
+                    <div className="my-1 border-t border-border" />
+                  </>
+                )}
                 {exportOptions.map((option, index) =>
                   option.separator ? (
                     <div key={`sep-${index}`} className="my-1 border-t border-border" />

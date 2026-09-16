@@ -29,7 +29,8 @@ function desktopHtmlPlugin() {
 }
 
 export default defineConfig({
-  base: isDesktop ? "./" : "/",
+  // OPENREEL_BASE=/edit/ builds for a sub-path (Clip Studio serves dist under /edit).
+  base: process.env.OPENREEL_BASE || (isDesktop ? "./" : "/"),
   plugins: [react(), desktopHtmlPlugin(), stripFfmpegPlugin(isDesktop), pruneFontsPlugin(isDesktop)],
   assetsInclude: ["**/*.wasm"],
   resolve: {

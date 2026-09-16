@@ -18,6 +18,7 @@ import type {
   Project,
   Track,
   Clip,
+  ClipMetadata,
   Effect,
   Keyframe,
   EasingType,
@@ -515,6 +516,7 @@ export class ActionExecutor {
           image: "Image",
           text: "Text",
           graphics: "Graphics",
+          moments: "Moments",
         };
         const trackCount =
           timeline.tracks.filter((track: MutableTrack) =>
@@ -529,11 +531,13 @@ export class ActionExecutor {
           role: params.role,
           name:
             params.name ??
-            `${
-              params.mode === "standard"
-                ? "Track"
-                : trackNames[params.trackType] || params.trackType
-            } ${trackCount}`,
+            (params.trackType === "moments" && params.role === "catalogue"
+              ? "Catalogue"
+              : `${
+                  params.mode === "standard"
+                    ? "Track"
+                    : trackNames[params.trackType] || params.trackType
+                } ${trackCount}`),
           clips: [],
           transitions: [],
           locked: false,
@@ -816,6 +820,7 @@ export class ActionExecutor {
           audioTrackIndex?: number;
           sourceClip?: Clip;
           clipId?: string;
+          metadata?: ClipMetadata;
         };
         const track = timeline.tracks.find(
           (t: MutableTrack) => t.id === params.trackId,
@@ -868,6 +873,9 @@ export class ActionExecutor {
                   : {}),
                 ...(params.audioTrackIndex !== undefined
                   ? { audioTrackIndex: params.audioTrackIndex }
+                  : {}),
+                ...(params.metadata
+                  ? { metadata: structuredClone(params.metadata) }
                   : {}),
               };
           params.clipId = newClip.id;
@@ -1095,6 +1103,28 @@ export class ActionExecutor {
           clips: track.clips.map((clip: MutableClip) =>
             clip.id === params.clipId
               ? { ...clip, colorGrading: params.colorGrading }
+              : clip,
+          ),
+        }));
+        break;
+      }
+
+      case "clip/setMetadata": {
+        const params = action.params as {
+          clipId: string;
+          metadata: Partial<ClipMetadata>;
+        };
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) =>
+            clip.id === params.clipId
+              ? {
+                  ...clip,
+                  metadata: {
+                    ...(clip.metadata ?? {}),
+                    ...structuredClone(params.metadata),
+                  },
+                }
               : clip,
           ),
         }));

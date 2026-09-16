@@ -291,6 +291,58 @@ describe("ExportEngine", () => {
     });
   });
 
+  describe("timeline duration", () => {
+    const makeClip = (trackId: string, startTime: number, duration: number) => ({
+      id: `${trackId}-clip`,
+      mediaId: trackId === "moments" ? "moment-x" : "media-1",
+      trackId,
+      startTime,
+      duration,
+      inPoint: 0,
+      outPoint: duration,
+      effects: [],
+      audioEffects: [],
+      transform: {
+        position: { x: 0, y: 0 },
+        scale: { x: 1, y: 1 },
+        rotation: 0,
+        anchor: { x: 0.5, y: 0.5 },
+        opacity: 1,
+      },
+      volume: 1,
+      keyframes: [],
+    });
+    const makeTrack = (id: string, type: string, clip: ReturnType<typeof makeClip>) => ({
+      id,
+      type,
+      name: id,
+      clips: [clip],
+      transitions: [],
+      locked: false,
+      hidden: false,
+      muted: false,
+      solo: false,
+    });
+
+    it("ignores moments tracks when computing the render length", () => {
+      const timeline = {
+        duration: 0,
+        tracks: [
+          makeTrack("video", "video", makeClip("video", 0, 10)),
+          makeTrack("moments", "moments", makeClip("moments", 30, 5)),
+        ],
+        subtitles: [],
+        markers: [],
+      };
+      const duration = (
+        exportEngine as unknown as {
+          calculateTimelineDuration: (t: unknown) => number;
+        }
+      ).calculateTimelineDuration(timeline);
+      expect(duration).toBe(10);
+    });
+  });
+
   describe("singleton pattern", () => {
     it("should return same instance from getExportEngine", () => {
       const engine1 = getExportEngine();

@@ -6,6 +6,8 @@ import type {
   MediaItem,
   Track,
   Clip,
+  ClipMetadata,
+  MomentKind,
   AutomationPoint,
   Transition,
   Action,
@@ -170,7 +172,7 @@ export interface ProjectState {
 
   // Track actions
   addTrack: (
-    trackType: "video" | "audio" | "image" | "text" | "graphics",
+    trackType: Track["type"],
     position?: number,
     options?: {
       mode?: "standard";
@@ -243,6 +245,20 @@ export interface ProjectState {
     trimStart: boolean,
   ) => Promise<ActionResult>;
   getClip: (clipId: string) => Clip | undefined;
+  /** Shallow-merge metadata into a clip (undoable). */
+  setClipMetadata: (
+    clipId: string,
+    metadata: Partial<ClipMetadata>,
+  ) => Promise<ActionResult>;
+  /**
+   * Add a OneLink moment on the first "moments" track (created on demand).
+   * startTime defaults to the playhead; the new clip is selected.
+   */
+  addMoment: (
+    kind: MomentKind,
+    startTime?: number,
+    trackId?: string,
+  ) => Promise<ActionResult>;
   addClipTransition: (transition: Transition) => Promise<Transition | null>;
   updateClipTransition: (
     transitionId: string,

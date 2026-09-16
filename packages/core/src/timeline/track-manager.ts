@@ -9,7 +9,7 @@ export interface TrackManagerOptions {
 }
 
 export interface CreateTrackParams {
-  type: "video" | "audio" | "image";
+  type: Track["type"];
   name?: string;
   position?: number;
 }

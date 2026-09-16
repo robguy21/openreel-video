@@ -18,7 +18,10 @@ const DYNAMIC_CACHE_NAME = "openreel-dynamic-v2";
  * Static assets to cache on install
  * These are the core application files needed for offline functionality
  */
-const STATIC_ASSETS = ["/", "/index.html", "/manifest.json"];
+// Relative to where the worker is served from, so a sub-path deployment (Clip Studio
+// serves this app under /edit/) caches its own shell, not the host site's root.
+const BASE = new URL("./", self.location.href).pathname;
+const STATIC_ASSETS = [BASE, BASE + "index.html", BASE + "manifest.json"];
 
 /**
  * Patterns for assets that should be cached dynamically
@@ -190,7 +193,7 @@ self.addEventListener("fetch", (event) => {
               return cachedResponse;
             }
             // Fall back to index.html for SPA routing
-            return caches.match("/index.html");
+            return caches.match(BASE + "index.html");
           });
         })
     );

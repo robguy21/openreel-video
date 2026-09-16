@@ -20,6 +20,7 @@ import {
   ZoomIn,
   Proportions,
   Magnet,
+  Zap,
 } from "@/icons/lucide-compat";
 import { ToolcraftButton as Button } from "@openreel/ui";
 import { ToolcraftIconButton as IconButton } from "@openreel/ui";
@@ -97,6 +98,7 @@ import {
 } from "./preview/index";
 import { snapCanvasPosition } from "./preview/canvas-snapping";
 import { captureNativeVideoFrame } from "./preview/video-frame";
+import { MomentOverlay } from "./preview/MomentOverlay";
 import { ProcessingOverlay } from "./ProcessingOverlay";
 import { editingFrameDurationMs } from "./editing-frame-rate";
 import {
@@ -105,6 +107,7 @@ import {
   createMotionAwareOcclusionMask,
   getStabilizedTransform,
   getVidstabEngine,
+  isMomentClip,
 } from "@openreel/core";
 import type {
   GSAPMotionPathPoint,
@@ -1411,6 +1414,8 @@ export const Preview: React.FC = () => {
   const selectedItems = useUIStore((state) => state.selectedItems);
   const cropMode = useUIStore((state) => state.cropMode);
   const cropClipId = useUIStore((state) => state.cropClipId);
+  const showMomentOverlays = useUIStore((state) => state.showMomentOverlays);
+  const setShowMomentOverlays = useUIStore((state) => state.setShowMomentOverlays);
   const setCropMode = useUIStore((state) => state.setCropMode);
   const exportState = useUIStore((state) => state.exportState);
   const motionPathMode = useUIStore((state) => state.motionPathMode);
@@ -1534,6 +1539,8 @@ export const Preview: React.FC = () => {
     let maxEnd = 0;
 
     for (const track of tracks) {
+      // Moments are metadata only and never extend playback.
+      if (track.type === "moments") continue;
       for (const clip of track.clips) {
         const end = clip.startTime + clip.duration;
         if (end > maxEnd) maxEnd = end;
@@ -6148,7 +6155,8 @@ export const Preview: React.FC = () => {
     if (!selectedClipId) return null;
     for (const track of timelineTracks) {
       const clip = track.clips.find((c) => c.id === selectedClipId);
-      if (clip) return clip;
+      // Moments have no visual and get no transform gizmo on the canvas.
+      if (clip) return isMomentClip(clip) ? null : clip;
     }
     return null;
   }, [selectedClipId, timelineTracks]);
@@ -7667,6 +7675,14 @@ export const Preview: React.FC = () => {
             </div>
           ) : null}
 
+          {showMomentOverlays && !cropMode ? (
+            <MomentOverlay
+              canvasRef={canvasRef}
+              projectWidth={settings.width}
+              projectHeight={settings.height}
+            />
+          ) : null}
+
           {canvasSnapGuides.x !== null && !cropMode ? (
             <span
               aria-hidden="true"
@@ -8316,6 +8332,19 @@ export const Preview: React.FC = () => {
             onClick={() => setShowSafeMargins((visible) => !visible)}
             className={`w-[34px] h-[34px] grid place-items-center rounded-[7px] transition-colors ${
               showSafeMargins
+                ? "bg-accent-soft text-accent"
+                : "bg-bg-2 text-fg-2 hover:text-fg hover:bg-bg-3"
+            }`}
+          />
+          <IconButton
+            label="Moment overlays"
+            icon={<Zap size={16} />}
+            variant="ghost"
+            size="sm"
+            aria-pressed={showMomentOverlays}
+            onClick={() => setShowMomentOverlays(!showMomentOverlays)}
+            className={`w-[34px] h-[34px] grid place-items-center rounded-[7px] transition-colors ${
+              showMomentOverlays
                 ? "bg-accent-soft text-accent"
                 : "bg-bg-2 text-fg-2 hover:text-fg hover:bg-bg-3"
             }`}

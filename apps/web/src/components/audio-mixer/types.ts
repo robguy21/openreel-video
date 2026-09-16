@@ -1,10 +1,12 @@
+import type { Track } from "@openreel/core";
+
 /**
  * Channel strip state for a single audio track
  */
 export interface ChannelStripState {
   readonly trackId: string;
   readonly trackName: string;
-  readonly trackType: "video" | "audio" | "image" | "text" | "graphics";
+  readonly trackType: Track["type"];
   readonly volume: number; // 0-4 (0 = -inf dB, 1 = 0dB, 4 = +12dB)
   readonly pan: number; // -1 (left) to 1 (right)
   readonly muted: boolean;

@@ -27,8 +27,10 @@ const calculateIsDark = (mode: ThemeMode): boolean => {
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set, get) => ({
-      mode: "light",
-      isDark: false,
+      // Dark by default: Clip Studio, which embeds this editor, is dark-only, and the
+      // toggle in the action rail still cycles dark -> auto -> light for anyone who wants it.
+      mode: "dark",
+      isDark: true,
 
       setMode: (mode: ThemeMode) => {
         const isDark = calculateIsDark(mode);
@@ -74,6 +76,19 @@ export const useThemeStore = create<ThemeState>()(
 );
 
 if (typeof window !== "undefined") {
+  // First visit (nothing persisted yet): paint the default before React mounts so the
+  // page never flashes light.
+  let hasPersistedTheme = false;
+  try {
+    hasPersistedTheme = window.localStorage.getItem("openreel-theme") !== null;
+  } catch {
+    /* storage blocked: stay with the in-memory default */
+  }
+  if (!hasPersistedTheme) {
+    document.documentElement.classList.add("dark");
+    document.documentElement.dataset.theme = "dark";
+  }
+
   const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
   mediaQuery.addEventListener("change", (e) => {

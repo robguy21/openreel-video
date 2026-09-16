@@ -391,6 +391,79 @@ describe("ProjectSerializer generatedShaders", () => {
     expect(imported.generatedShaders?.map((d) => d.id)).toEqual(["ai-round-1"]);
   });
 
+  it("round-trips a moments track and accepts the moment- media prefix", () => {
+    const serializer = new ProjectSerializer(new MemoryStorageEngine());
+    const project = makeProject({
+      timeline: {
+        tracks: [
+          {
+            id: "track-moments",
+            type: "moments",
+            name: "Moments",
+            clips: [
+              {
+                id: "m1",
+                mediaId: "moment-m1",
+                trackId: "track-moments",
+                startTime: 3,
+                duration: 5,
+                inPoint: 0,
+                outPoint: 5,
+                effects: [],
+                audioEffects: [],
+                transform: {
+                  position: { x: 0, y: 0 },
+                  scale: { x: 1, y: 1 },
+                  rotation: 0,
+                  anchor: { x: 0.5, y: 0.5 },
+                  opacity: 1,
+                },
+                volume: 1,
+                keyframes: [],
+                metadata: {
+                  moment: {
+                    kind: "product",
+                    label: "Shoes",
+                    key: "shoes-1",
+                    name: "Shoes",
+                    product_id: "SKU-1",
+                    price: 499,
+                    currency: "ZAR",
+                    url: "https://example.com/shoes",
+                  },
+                },
+              },
+            ],
+            transitions: [],
+            locked: false,
+            hidden: false,
+            muted: false,
+            solo: false,
+          },
+        ],
+        subtitles: [],
+        duration: 0,
+        markers: [],
+      },
+    });
+
+    const json = serializer.exportToJson(project);
+    expect(serializer.validateProjectJson(json)).toMatchObject({
+      valid: true,
+      errors: [],
+    });
+
+    const imported = serializer.importFromJson(json);
+    const track = imported.timeline.tracks[0];
+    expect(track.type).toBe("moments");
+    expect(track.clips[0].mediaId).toBe("moment-m1");
+    expect(track.clips[0].metadata?.moment).toMatchObject({
+      kind: "product",
+      key: "shoes-1",
+      price: 499,
+    });
+  });
+
   it("defaults generatedShaders to an empty array when absent", () => {
     const serializer = new ProjectSerializer(new MemoryStorageEngine());
     const project = makeProject();

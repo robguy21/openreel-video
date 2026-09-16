@@ -1,4 +1,4 @@
-import type { Project, ProjectSettings } from "@openreel/core";
+import type { Project, ProjectSettings, Track } from "@openreel/core";
 import { normalizeProjectStoredFields } from "@openreel/core";
 import { v4 as uuidv4 } from "uuid";
 
@@ -276,7 +276,7 @@ class ProjectManager {
     const tracks =
       template.tracks?.map((t, i) => ({
         id: `track-${Date.now()}-${i}`,
-        type: t.type as "video" | "audio" | "image" | "text" | "graphics",
+        type: t.type as Track["type"],
         name: t.name,
         clips: [],
         transitions: [],

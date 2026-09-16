@@ -8,7 +8,8 @@ export type AppRoute =
   | "templates"
   | "recent"
   | "share"
-  | "motion";
+  | "motion"
+  | "studio";
 
 export interface RouteParams {
   dimensions?: string;
@@ -19,6 +20,8 @@ export interface RouteParams {
   tab?: string;
   shareId?: string;
   compositionId?: string;
+  /** Clip Studio project id: `#/studio?id=<pid>` opens that project from the studio server. */
+  id?: string;
 }
 
 export interface RouterState {
@@ -48,6 +51,7 @@ function parseHash(hash: string): RouterState {
     "recent",
     "share",
     "motion",
+    "studio",
   ];
 
   if (route === "share" && pathParts[1]) {

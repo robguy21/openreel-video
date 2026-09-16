@@ -2,12 +2,19 @@ import React, { useRef, useState, useEffect, useCallback } from "react";
 import { ToolcraftContextMenu as ContextMenu } from "@openreel/ui";
 import { Box, Image, Layers } from "@/icons/lucide-compat";
 import type { Clip, Track, TransitionType } from "@openreel/core";
+import {
+  findMomentOverlap,
+  getMoment,
+  isMomentClip,
+  MOMENT_RULE_MESSAGES,
+} from "@openreel/core";
 import { useProjectStore } from "../../../stores/project-store";
 import { useUIStore } from "../../../stores/ui-store";
 import { useTimelineStore } from "../../../stores/timeline-store";
 import {
   calculateSnap,
   getClipStyle,
+  getMomentClipStyle,
   getClipWaveformBarAmplitudes,
 } from "./utils";
 import { useClipContextMenuItems } from "./ClipContextMenu";
@@ -17,6 +24,7 @@ import {
   EFFECT_DRAG_MIME,
   TRANSITION_DRAG_MIME,
 } from "../panels/EffectsTransitionsPanel";
+import { MOMENT_KIND_BADGES } from "../panels/MomentsPanel";
 import { parseEditorEffectDropPayload } from "./effect-drop";
 
 interface ClipComponentProps {
@@ -121,6 +129,9 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     startY: 0,
   });
   const clipRef = useRef<HTMLDivElement>(null);
+  // Moments: set when the last drag/trim position collided with another
+  // moment, so mouseup can explain why the clip stayed put.
+  const momentRejectedRef = useRef(false);
   const contextMenuItems = useClipContextMenuItems({ clip, track });
   const moveCommitRafRef = useRef<number | null>(null);
   const pendingCommitRef = useRef<(() => void) | null>(null);
@@ -140,7 +151,11 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
   const isAudio = clipMediaType === "audio";
   const isImage = clipMediaType === "image";
   const isMotionClip = Boolean(clip.metadata?.motionClip);
-  const clipStyle = getClipStyle(clipMediaType);
+  const isMoment = isMomentClip(clip);
+  const moment = isMoment ? getMoment(clip) : null;
+  const clipStyle = isMoment
+    ? getMomentClipStyle(moment?.kind)
+    : getClipStyle(clipMediaType);
 
   const handleClick = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -503,7 +518,8 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       const currentScrollTop = timelineRef.current?.scrollTop || 0;
       const scrollDelta = currentScrollTop - dragStartRef.current.scrollTop;
       const yDelta = (e.clientY - dragStartRef.current.mouseY) + scrollDelta;
-      setDragYOffset(yDelta);
+      // Moments move horizontally only and always stay on their own track.
+      setDragYOffset(isMoment ? 0 : yDelta);
 
       const scrollTop = timelineRef.current?.scrollTop || 0;
       const mouseY = e.clientY - timelineRect.top + scrollTop;
@@ -511,21 +527,39 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       let hoveredTrackIsLocked = false;
       let cumulativeY = 0;
 
-      for (const t of allTracks) {
-        const height = trackHeights.get(t.id) || 48;
-        if (mouseY >= cumulativeY && mouseY < cumulativeY + height) {
-          hoveredTrackIsLocked = Boolean(t.locked);
-          if (!t.locked && t.id !== track.id) {
-            targetTrackId = t.id;
+      if (!isMoment) {
+        for (const t of allTracks) {
+          const height = trackHeights.get(t.id) || 48;
+          if (mouseY >= cumulativeY && mouseY < cumulativeY + height) {
+            hoveredTrackIsLocked = Boolean(t.locked);
+            if (!t.locked && t.id !== track.id) {
+              targetTrackId = t.id;
+            }
+            break;
           }
-          break;
+          cumulativeY += height;
         }
-        cumulativeY += height;
       }
 
-      setIsInvalidDrop(hoveredTrackIsLocked);
+      const momentCollides =
+        isMoment &&
+        Boolean(
+          findMomentOverlap(track.clips, {
+            id: clip.id,
+            startTime: snapResult.time,
+            duration: clip.duration,
+          }),
+        );
+      momentRejectedRef.current = momentCollides;
+      setIsInvalidDrop(hoveredTrackIsLocked || momentCollides);
 
       pendingDropRef.current = { time: snapResult.time, targetTrackId };
+      if (momentCollides) {
+        // Leave the clip where it last fitted; nothing to commit this frame.
+        pendingCommitRef.current = null;
+        onSnapIndicator(null);
+        return;
+      }
 
       // Coalesce store commits to one per animation frame. A fast mouse
       // fires many mousemove events between frames; dispatching moveClip on
@@ -577,7 +611,12 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       pendingCommit?.();
 
       const { time, targetTrackId } = pendingDropRef.current;
-      await onMoveClip(clip.id, time, targetTrackId ?? track.id);
+      if (momentRejectedRef.current) {
+        momentRejectedRef.current = false;
+        toast.error(MOMENT_RULE_MESSAGES.NO_OVERLAP, "The moment stays where it was");
+      } else {
+        await onMoveClip(clip.id, time, targetTrackId ?? track.id);
+      }
 
       setIsDragging(false);
       setDragYOffset(0);
@@ -620,6 +659,16 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
   useEffect(() => {
     if (!isTrimming || !trimEdge || !onTrimClip) return;
 
+    const momentTrimCollides = (startTime: number, endTime: number) =>
+      isMoment &&
+      Boolean(
+        findMomentOverlap(track.clips, {
+          id: clip.id,
+          startTime,
+          duration: endTime - startTime,
+        }),
+      );
+
     const handleMouseMove = (e: MouseEvent) => {
       const deltaX = e.clientX - trimStartRef.current.mouseX;
       const deltaTime = deltaX / pixelsPerSecond;
@@ -632,6 +681,13 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
         const maxStartTime =
           trimStartRef.current.startTime + trimStartRef.current.duration - 0.1;
         const clampedStartTime = Math.min(newStartTime, maxStartTime);
+        const endTime =
+          trimStartRef.current.startTime + trimStartRef.current.duration;
+        if (momentTrimCollides(clampedStartTime, endTime)) {
+          momentRejectedRef.current = true;
+          return;
+        }
+        momentRejectedRef.current = false;
         onTrimClip(clip.id, "left", clampedStartTime);
       } else {
         const newEndTime =
@@ -640,6 +696,11 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
           deltaTime;
         const minEndTime = trimStartRef.current.startTime + 0.1;
         const clampedEndTime = Math.max(newEndTime, minEndTime);
+        if (momentTrimCollides(trimStartRef.current.startTime, clampedEndTime)) {
+          momentRejectedRef.current = true;
+          return;
+        }
+        momentRejectedRef.current = false;
         onTrimClip(clip.id, "right", clampedEndTime);
       }
     };
@@ -648,6 +709,10 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       setIsTrimming(false);
       setTrimEdge(null);
       document.body.style.cursor = "";
+      if (momentRejectedRef.current) {
+        momentRejectedRef.current = false;
+        toast.error(MOMENT_RULE_MESSAGES.NO_OVERLAP, "The moment keeps its previous length");
+      }
     };
 
     window.addEventListener("mousemove", handleMouseMove);
@@ -657,10 +722,11 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isTrimming, trimEdge, clip.id, pixelsPerSecond, onTrimClip]);
+  }, [isTrimming, trimEdge, clip.id, clip.duration, isMoment, track.clips, pixelsPerSecond, onTrimClip]);
 
   const thumbnailCount = Math.max(1, Math.floor(width / 60));
   const clipName =
+    moment?.label ||
     motionComposition?.name ||
     (typeof clip.metadata?.compoundClipName === "string"
       ? clip.metadata.compoundClipName
@@ -867,7 +933,17 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
         }`}
         style={isAudio ? undefined : { textShadow: "0 1px 2px rgba(0,0,0,0.4)" }}
       >
+        {moment && (
+          <span className="mr-1.5 inline-block rounded-sm bg-black/30 px-1 py-px text-[8px] font-bold uppercase tracking-wide align-middle">
+            {MOMENT_KIND_BADGES[moment.kind]}
+          </span>
+        )}
         {clipName}
+        {moment && (
+          <span className="ml-1.5 font-mono text-[9px] font-normal text-white/70">
+            {moment.key}
+          </span>
+        )}
       </span>
 
       {isAudio &&
@@ -925,7 +1001,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
         </div>
       )}
 
-      {(isVideo || isImage || isAudio) && onTrimClip && (
+      {(isVideo || isImage || isAudio || isMoment) && onTrimClip && (
         <>
           <div
             onMouseDown={handleTrimMouseDown("left")}

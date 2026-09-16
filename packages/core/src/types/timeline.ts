@@ -40,7 +40,7 @@ export interface Track {
    * Legacy serialization hint retained for older OpenReel readers. New code
    * must resolve behavior from the timeline item, not from this value.
    */
-  readonly type: "video" | "audio" | "image" | "text" | "graphics";
+  readonly type: "video" | "audio" | "image" | "text" | "graphics" | "moments";
   /** Standard tracks accept every timeline item kind. Missing means standard. */
   readonly mode?: "standard";
   /** Editorial meaning used for naming, captions, and audio mixing. */
@@ -50,7 +50,9 @@ export interface Track {
     | "dialogue"
     | "music"
     | "effects"
-    | "ambience";
+    | "ambience"
+    /** Second "moments" lane: catalogue moments may overlap the other kinds. */
+    | "catalogue";
   readonly name: string;
   readonly clips: Clip[];
   readonly transitions: Transition[];

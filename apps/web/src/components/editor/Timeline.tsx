@@ -35,6 +35,7 @@ import {
   Volume2,
   VolumeX,
   Pencil,
+  Zap,
 } from "@/icons/lucide-compat";
 import { ToolcraftIconButton as IconButton } from "@openreel/ui";
 import {
@@ -78,6 +79,10 @@ import {
   trimLinkedCaptions,
 } from "../../utils/linked-caption-edit";
 import { CaptionBatchSelectButton } from "./timeline/CaptionBatchSelectButton";
+import { getMomentRuleMessage } from "../../utils/moment-rules";
+import { dropMomentOnTimeline, parseMomentDropPayload } from "./timeline/moment-drop";
+import { findMomentOverlap, momentLaneRole } from "@openreel/core";
+import { LayoutGrid } from "@/icons/lucide-compat";
 
 const TRACK_LAYER_FILTERS: readonly {
   id: TrackLayerFilter;
@@ -89,6 +94,7 @@ const TRACK_LAYER_FILTERS: readonly {
   { id: "audio", label: "Audio" },
   { id: "text", label: "Text" },
   { id: "graphics", label: "Graphics" },
+  { id: "moments", label: "Moments" },
 ];
 
 const ADD_TRACK_ROW_HEIGHT = 36;
@@ -735,9 +741,11 @@ export const Timeline: React.FC = () => {
 
   const handleDropMedia = useCallback(
     async (trackId: string, mediaId: string, startTime: number) => {
-      await useProjectStore
+      const result = await useProjectStore
         .getState()
         .placeMediaClip(mediaId, trackId || undefined, startTime);
+      const rule = getMomentRuleMessage(result);
+      if (rule) toast.error("Can't place media", rule);
     },
     [],
   );
@@ -763,6 +771,9 @@ export const Timeline: React.FC = () => {
           : await store.moveClip(clipId, newStartTime);
       if (result.success && sourceClip) {
         moveLinkedCaptions(useProjectStore.getState(), sourceClip, newStartTime);
+      } else if (!result.success) {
+        const rule = getMomentRuleMessage(result);
+        if (rule) toast.error("Can't move clip", rule);
       }
     },
     [],
@@ -834,6 +845,19 @@ export const Timeline: React.FC = () => {
         edge === "left"
           ? Math.max(0.1, clip.startTime + clip.duration - newTime)
           : Math.max(0.1, newTime - clip.startTime);
+
+      // Moments never overlap: refuse the trim and leave the clip as it was.
+      const owningTrack = tracks.find((t) => t.id === clip.trackId);
+      if (
+        owningTrack?.type === "moments" &&
+        findMomentOverlap(owningTrack.clips, {
+          id: clip.id,
+          startTime: edge === "left" ? newTime : clip.startTime,
+          duration: newDuration,
+        })
+      ) {
+        return;
+      }
 
       const updates =
         edge === "left"
@@ -919,8 +943,41 @@ export const Timeline: React.FC = () => {
             name: "Captions",
           }),
       },
+      // Exactly one moments track per lane: hide each entry once it exists.
+      ...(tracks.some(
+        (track) =>
+          track.type === "moments" && momentLaneRole(track) === "general",
+      )
+        ? []
+        : [
+            {
+              label: "Moments track",
+              icon: <Zap size={16} className="text-fuchsia-400" aria-hidden />,
+              onClick: () =>
+                addTrack("moments", undefined, {
+                  name: "Moments",
+                  role: "general",
+                }),
+            },
+          ]),
+      ...(tracks.some(
+        (track) =>
+          track.type === "moments" && momentLaneRole(track) === "catalogue",
+      )
+        ? []
+        : [
+            {
+              label: "Catalogue track",
+              icon: <LayoutGrid size={16} className="text-teal-400" aria-hidden />,
+              onClick: () =>
+                addTrack("moments", undefined, {
+                  name: "Catalogue",
+                  role: "catalogue",
+                }),
+            },
+          ]),
     ],
-    [addTrack],
+    [addTrack, tracks],
   );
 
   // Small, mockup-styled timeline tool button
@@ -1621,6 +1678,11 @@ export const Timeline: React.FC = () => {
                 const rawData = e.dataTransfer.getData("application/json");
                 if (!rawData) return;
                 const data = JSON.parse(rawData);
+                const momentKind = parseMomentDropPayload(data);
+                if (momentKind) {
+                  void dropMomentOnTimeline(momentKind, snappedTime);
+                  return;
+                }
                 if (!data?.mediaId) return;
                 handleDropMedia("", data.mediaId, snappedTime);
               } catch {
