@@ -22,6 +22,8 @@ export interface RouteParams {
   compositionId?: string;
   /** Clip Studio project id: `#/studio?id=<pid>` opens that project from the studio server. */
   id?: string;
+  /** Clip Studio part id: `#/studio?id=<pid>&part=<part id>` opens that part's cut. */
+  part?: string;
 }
 
 export interface RouterState {

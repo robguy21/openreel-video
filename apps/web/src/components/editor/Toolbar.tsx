@@ -99,9 +99,9 @@ export const Toolbar: React.FC = () => {
         return;
       }
       setDesktopPage("edit");
-      // Keep the Clip Studio project in the hash so a reload still reopens it.
-      const studioPid = useStudioStore.getState().pid;
-      if (studioPid) navigate("studio", { id: studioPid });
+      // Keep the Clip Studio project and part in the hash so a reload still reopens it.
+      const { pid: studioPid, part: studioPart } = useStudioStore.getState();
+      if (studioPid) navigate("studio", { id: studioPid, part: studioPart ?? undefined });
       else navigate("editor");
     },
     [navigate, setDesktopPage],

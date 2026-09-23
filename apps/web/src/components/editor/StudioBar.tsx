@@ -10,6 +10,7 @@ import { studioHomeUrl } from "../../services/studio/studio-client";
 export const StudioBar: React.FC = () => {
   const pid = useStudioStore((s) => s.pid);
   const name = useStudioStore((s) => s.name);
+  const partLabel = useStudioStore((s) => s.partLabel);
   const status = useStudioStore((s) => s.status);
   const dirty = useStudioStore((s) => s.dirty);
   const message = useStudioStore((s) => s.message);
@@ -46,8 +47,12 @@ export const StudioBar: React.FC = () => {
           ← Studio
         </a>
       )}
-      <span className="text-[12px] text-fg-2 max-w-[160px] truncate" title={name}>
+      <span
+        className="text-[12px] text-fg-2 max-w-[240px] truncate"
+        title={partLabel ? `${name} · ${partLabel}` : name}
+      >
         {name}
+        {partLabel ? <span className="text-fg-3"> · {partLabel}</span> : null}
       </span>
 
       {busy ? (

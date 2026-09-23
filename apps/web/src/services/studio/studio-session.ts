@@ -24,16 +24,17 @@ import { toast } from "../../stores/notification-store";
 import { loadMediaBlob, saveMediaBlob } from "../media-storage";
 import { createMissingMediaItem, restoreMediaItem } from "../../utils/media-recovery";
 import {
-  STUDIO_API,
   fetchManifest,
   fetchMediaBlob,
   fetchSavedDoc,
   pollJob,
   prepareNarration,
   putSavedDoc,
+  putSavedDocRequest,
   uploadExport,
   type StudioManifest,
   type StudioMediaMap,
+  type StudioRef,
   type StudioSavedDoc,
   type StudioShot,
 } from "./studio-client";
@@ -42,7 +43,14 @@ export type StudioStatus = "idle" | "opening" | "ready" | "saving" | "exporting"
 
 export interface StudioSessionState {
   pid: string | null;
+  /** The part being cut, as the url named it; null = none named, which the studio reads
+   *  as Part 1. Every studio call sends it back unchanged. */
+  part: string | null;
+  /** The project's name. */
   name: string;
+  /** How the part is shown beside the name ("Part 2 · The chase"); "" when the studio
+   *  did not say which part this is (a studio from before parts). */
+  partLabel: string;
   status: StudioStatus;
   message: string;
   progress: number; // 0..1 while opening / exporting
@@ -57,7 +65,9 @@ export interface StudioSessionState {
 
 export const useStudioStore = create<StudioSessionState>()(() => ({
   pid: null,
+  part: null,
   name: "",
+  partLabel: "",
   status: "idle",
   message: "",
   progress: 0,
@@ -80,23 +90,57 @@ export function isStudioSession(): boolean {
   return get().pid !== null;
 }
 
+/** What every studio call is about: this project, this part. */
+function ref(): StudioRef | null {
+  const { pid, part } = get();
+  return pid ? { pid, part } : null;
+}
+
+/** "Part 2 · The chase", or "Part 2" for a part with no name typed: the studio's own
+ *  `label` when it sends one, else drawn the same way here. */
+export function partLabelOf(manifest: StudioManifest): string {
+  const p = manifest.project.part;
+  if (!p) return "";
+  if (p.label) return p.label;
+  const name = p.name?.trim() || "";
+  if (!p.number) return name;
+  const n = `Part ${p.number}`;
+  return name ? `${n} · ${name}` : n;
+}
+
+/** The editor project's title: the film's name, and the part when there is one, so two
+ *  parts' cuts are told apart in the editor and in the export's default name. */
+export function editTitleOf(manifest: StudioManifest): string {
+  const label = partLabelOf(manifest);
+  const name = manifest.project.name || "";
+  return label ? (name ? `${name} · ${label}` : label) : name;
+}
+
 // ─── Opening ────────────────────────────────────────────────────────────────
 
 let opening: Promise<void> | null = null;
 
-/** Idempotent: a second call while the first is in flight returns the same promise. */
-export function openStudioProject(pid: string): Promise<void> {
-  if (opening && get().pid === pid) return opening;
-  opening = doOpen(pid).finally(() => {
+/**
+ * Idempotent: a second call for the same project and part while the first is in flight
+ * returns the same promise. `part` is the url's `part`, passed through as given; absent
+ * means Part 1.
+ */
+export function openStudioProject(pid: string, part: string | null = null): Promise<void> {
+  const want = part || null;
+  if (opening && get().pid === pid && get().part === want) return opening;
+  opening = doOpen({ pid, part: want }).finally(() => {
     opening = null;
   });
   return opening;
 }
 
-async function doOpen(pid: string): Promise<void> {
+async function doOpen(at: StudioRef): Promise<void> {
   stopAutosave();
+  const { pid } = at;
   set({
     pid,
+    part: at.part,
+    partLabel: "",
     status: "opening",
     message: "Contacting Clip Studio…",
     progress: 0,
@@ -106,7 +150,7 @@ async function doOpen(pid: string): Promise<void> {
   });
   try {
     // 1. narration the voice track needs (cached server-side by text + voice)
-    const prep = await prepareNarration(pid);
+    const prep = await prepareNarration(at);
     if (prep.queued && prep.job) {
       progress(`Synthesising narration (${prep.missing})…`, 0.05);
       await pollJob(pid, prep.job.id, (job) =>
@@ -115,11 +159,11 @@ async function doOpen(pid: string): Promise<void> {
     }
 
     // 2. what the project looks like now
-    const manifest = await fetchManifest(pid);
-    set({ name: manifest.project.name });
+    const manifest = await fetchManifest(at);
+    set({ name: manifest.project.name, partLabel: partLabelOf(manifest) });
 
-    // 3. restore the saved edit, or lay out the takes for the first time
-    const saved = manifest.editor_saved ? await fetchSavedDoc(pid) : null;
+    // 3. restore the part's saved edit, or lay out its takes for the first time
+    const saved = manifest.editor_saved ? await fetchSavedDoc(at) : null;
     if (saved && saved.studio?.app === "openreel") {
       await restoreSaved(saved, manifest);
     } else {
@@ -159,16 +203,37 @@ function probeVideo(file: File): Promise<{ width: number; height: number }> {
   });
 }
 
-function shotFileName(shot: StudioShot, suffix: string, ext: string): string {
-  const n = String(shot.order + 1).padStart(2, "0");
+/**
+ * The prefix a shot's files carry in the media library: `S01-03` = scene 1, shot 3, both
+ * counted within the part (the manifest's `number`), which is unique within the part and
+ * says the same number the studio's Film page does. A studio from before parts sends no
+ * `number`, and then it is the film-wide position, `01`, as it always was.
+ */
+export function shotPrefix(shot: Pick<StudioShot, "order" | "number">): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (Array.isArray(shot.number) && shot.number.length === 3) {
+    return `S${pad(shot.number[1])}-${pad(shot.number[2])}`;
+  }
+  return pad(shot.order + 1);
+}
+
+export function shotFileName(
+  shot: Pick<StudioShot, "order" | "number" | "summary">,
+  suffix: string,
+  ext: string,
+): string {
   const slug = (shot.summary || "shot").replace(/[^\w\- ]+/g, "").trim().slice(0, 40) || "shot";
-  return `${n}${suffix} ${slug}.${ext}`;
+  return `${shotPrefix(shot)}${suffix} ${slug}.${ext}`;
 }
 
 async function buildFromManifest(manifest: StudioManifest): Promise<void> {
   const shots = manifest.shots.filter((s) => s.video);
   if (!shots.length) {
-    throw new Error("No shot has a rendered take yet - render at least one in Shots first.");
+    throw new Error(
+      manifest.project.part
+        ? "No shot in this part has a rendered take yet - render at least one first."
+        : "No shot has a rendered take yet - render at least one in Shots first.",
+    );
   }
 
   // Download everything first so the project canvas can match the first take.
@@ -186,7 +251,7 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
   }
   const dims = await probeVideo(files[0].video);
 
-  useProjectStore.getState().createNewProject(manifest.project.name, {
+  useProjectStore.getState().createNewProject(editTitleOf(manifest), {
     width: dims.width,
     height: dims.height,
     frameRate: manifest.fps || 24,
@@ -327,7 +392,7 @@ async function restoreSaved(saved: StudioSavedDoc, manifest: StudioManifest): Pr
 
   useProjectStore.getState().loadProject({
     ...project,
-    name: manifest.project.name || project.name,
+    name: editTitleOf(manifest) || project.name,
     mediaLibrary: { ...project.mediaLibrary, items },
   });
   set({ media });
@@ -362,16 +427,11 @@ function stopAutosave() {
 }
 
 function flushOnUnload() {
-  const { dirty, pid } = get();
-  if (!dirty || !pid) return;
+  const at = ref();
+  if (!get().dirty || !at) return;
   // keepalive lets the request outlive the tab; the document is small (media is by reference)
   try {
-    void fetch(`${STUDIO_API}/projects/${pid}/editor/doc`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildSavedDoc()),
-      keepalive: true,
-    });
+    void fetch(...putSavedDocRequest(at, buildSavedDoc(), true));
   } catch {
     /* best effort */
   }
@@ -381,19 +441,20 @@ function buildSavedDoc(): StudioSavedDoc {
   const full = useProjectStore.getState().getFullProject();
   const serializer = createProjectSerializer(createStorageEngine());
   const parsed = JSON.parse(serializer.exportToJsonWithMetadata(full, "Clip Studio edit")) as StudioSavedDoc;
-  const { pid, media } = get();
+  const { pid, part, media } = get();
   // Only keep mappings for media that still exists in the library.
   const live = new Set(full.mediaLibrary.items.map((m) => m.id));
   const kept: StudioMediaMap = {};
-  for (const [id, ref] of Object.entries(media)) if (live.has(id)) kept[id] = ref;
+  for (const [id, m] of Object.entries(media)) if (live.has(id)) kept[id] = m;
   parsed.studio = { pid: pid!, media: kept, savedAt: Date.now(), app: "openreel" };
+  if (part) parsed.studio.part = part;
   return parsed;
 }
 
 /** Serialised: a save started while another is in flight waits for it. */
 export function saveToStudio(): Promise<void> {
-  const pid = get().pid;
-  if (!pid) return Promise.resolve();
+  const at = ref();
+  if (!at) return Promise.resolve();
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -402,7 +463,7 @@ export function saveToStudio(): Promise<void> {
     const before = get().status;
     if (before === "ready") set({ status: "saving" });
     try {
-      const r = await putSavedDoc(pid, buildSavedDoc());
+      const r = await putSavedDoc(at, buildSavedDoc());
       set({ dirty: false, lastSavedAt: r.ts * 1000, error: null });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -471,8 +532,8 @@ export async function exportToStudio(
   name?: string,
   settingsOverride: Partial<VideoExportSettings> = {},
 ): Promise<void> {
-  const pid = get().pid;
-  if (!pid || get().status === "exporting") return;
+  const at = ref();
+  if (!at || get().status === "exporting") return;
   const project: Project = useProjectStore.getState().getFullProject();
   const settings: Partial<VideoExportSettings> = {
     width: project.settings.width,
@@ -502,7 +563,7 @@ export async function exportToStudio(
     }
     if (!result?.success) throw new Error(result?.error?.message || "Export failed");
     progress("Uploading to Clip Studio…", 1);
-    const r = await uploadExport(pid, blob(), name || project.name || "edit", "mp4");
+    const r = await uploadExport(at, blob(), name || project.name || "edit", "mp4");
     set({ lastExport: { url: r.url, asset: r.export }, lastExportAt: Date.now() });
     toast.success("Sent to Clip Studio", `${(r.bytes / 1e6).toFixed(1)} MB saved as ${r.export}`);
   } catch (e) {

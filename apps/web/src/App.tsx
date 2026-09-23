@@ -64,10 +64,11 @@ function App() {
     } else if (route === "studio") {
       // Opened from Clip Studio: build or restore that project, then land in the editor.
       hasHandledInitialRoute.current = true;
-      // The hash stays `#/studio?id=...` so a plain reload reopens the same project.
+      // The hash stays `#/studio?id=...&part=...` so a plain reload reopens the same
+      // project and part. No `part` = Part 1, which is also what an older studio serves.
       const pid = params.id;
       if (pid) {
-        void openStudioProject(pid).catch(() => undefined);
+        void openStudioProject(pid, params.part || null).catch(() => undefined);
       } else {
         navigate("welcome");
       }
