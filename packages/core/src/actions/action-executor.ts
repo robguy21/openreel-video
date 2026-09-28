@@ -948,16 +948,12 @@ export class ActionExecutor {
           ...track,
           clips: track.clips.map((clip: MutableClip) => {
             if (clip.id === params.clipId) {
-              const updates: Partial<MutableClip> = {};
-              if (params.inPoint !== undefined) {
-                updates.inPoint = params.inPoint;
-                updates.duration = clip.outPoint - params.inPoint;
-              }
-              if (params.outPoint !== undefined) {
-                updates.outPoint = params.outPoint;
-                updates.duration = params.outPoint - clip.inPoint;
-              }
-              return { ...clip, ...updates };
+              // The length is the span between the NEW in and out: undo sends both at
+              // once, and taking the other edge from the clip as it stands (the trimmed
+              // one) left an undone trim's clip at its trimmed length.
+              const inPoint = params.inPoint ?? clip.inPoint;
+              const outPoint = params.outPoint ?? clip.outPoint;
+              return { ...clip, inPoint, outPoint, duration: outPoint - inPoint };
             }
             return clip;
           }),

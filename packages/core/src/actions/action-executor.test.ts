@@ -262,6 +262,51 @@ describe("ActionExecutor compound instance synchronization", () => {
   });
 });
 
+describe("ActionExecutor clip/trim", () => {
+  it("gives the clip the length between its in and out, also when both are sent", async () => {
+    const executor = new ActionExecutor();
+    const project = makeProjectWithClip({ startTime: 2, inPoint: 1, outPoint: 5, duration: 4 });
+    await executor.execute({
+      id: "trim-both",
+      type: "clip/trim",
+      timestamp: Date.now(),
+      params: { clipId: "c1", inPoint: 1.5, outPoint: 4 },
+    } as Action, project);
+    expect(project.timeline.tracks[0].clips[0]).toMatchObject({
+      startTime: 2,
+      inPoint: 1.5,
+      outPoint: 4,
+      duration: 2.5,
+    });
+  });
+
+  it("restores the clip's length when a trim of either edge is undone", async () => {
+    const executor = new ActionExecutor();
+    const project = makeProjectWithClip({ startTime: 2, inPoint: 1, outPoint: 5, duration: 4 });
+    const clip = () => project.timeline.tracks[0].clips[0];
+
+    await executor.execute({
+      id: "trim-in",
+      type: "clip/trim",
+      timestamp: Date.now(),
+      params: { clipId: "c1", inPoint: 1.5 },
+    } as Action, project);
+    expect(clip()).toMatchObject({ inPoint: 1.5, outPoint: 5, duration: 3.5, startTime: 2 });
+    await executor.undo(project);
+    expect(clip()).toMatchObject({ inPoint: 1, outPoint: 5, duration: 4, startTime: 2 });
+
+    await executor.execute({
+      id: "trim-out",
+      type: "clip/trim",
+      timestamp: Date.now() + 1000,
+      params: { clipId: "c1", outPoint: 3 },
+    } as Action, project);
+    expect(clip()).toMatchObject({ inPoint: 1, outPoint: 3, duration: 2 });
+    await executor.undo(project);
+    expect(clip()).toMatchObject({ inPoint: 1, outPoint: 5, duration: 4 });
+  });
+});
+
 describe("ActionExecutor clip/setBlendMode", () => {
   it("sets blend mode and restores prior (undefined -> normal) on undo", async () => {
     const executor = new ActionExecutor();
