@@ -800,6 +800,50 @@ export class ActionValidator {
         }
         break;
 
+      case "clip/insertEdit":
+      case "clip/overwriteEdit": {
+        const p = action.params as { at?: unknown; clips?: unknown };
+        if (typeof p.at !== "number" || !Number.isFinite(p.at) || p.at < 0) {
+          errors.push({ code: "INVALID_PARAMS", message: "The playhead must be a time at or after 0", path: "params.at" });
+        }
+        if (!Array.isArray(p.clips) || p.clips.length === 0 || p.clips.length > 2) {
+          errors.push({ code: "INVALID_PARAMS", message: "One or two clips are placed", path: "params.clips" });
+          break;
+        }
+        const seenTracks = new Set<string>();
+        (p.clips as Array<Record<string, unknown>>).forEach((c, i) => {
+          const path = `params.clips.${i}`;
+          const track = typeof c.trackId === "string" ? this.findTrack(timeline, c.trackId) : null;
+          if (!track) {
+            errors.push({ code: "TRACK_NOT_FOUND", message: `Track ${String(c.trackId)} not found`, path });
+          } else if (track.locked) {
+            errors.push({ code: "INVALID_PARAMS", message: `${track.name} is locked`, path });
+          } else if (seenTracks.has(track.id)) {
+            errors.push({ code: "INVALID_PARAMS", message: "Two clips cannot go on one track", path });
+          } else {
+            seenTracks.add(track.id);
+          }
+          if (typeof c.mediaId !== "string" || !project.mediaLibrary.items.some((m) => m.id === c.mediaId)) {
+            errors.push({ code: "MEDIA_NOT_FOUND", message: `Media ${String(c.mediaId)} not found`, path });
+          }
+          if (typeof c.clipId !== "string" || this.findClip(timeline, c.clipId)) {
+            errors.push({ code: "INVALID_PARAMS", message: "Each placed clip needs a new id", path });
+          }
+          if (typeof c.inPoint !== "number" || typeof c.outPoint !== "number" || !(c.outPoint > c.inPoint) || c.inPoint < 0) {
+            errors.push({ code: "INVALID_PARAMS", message: "The span must have an In before its Out", path });
+          }
+        });
+        break;
+      }
+
+      case "clip/restoreTracks": {
+        const p = action.params as { tracks?: unknown };
+        if (!Array.isArray(p.tracks)) {
+          errors.push({ code: "INVALID_PARAMS", message: "tracks must be a list", path: "params.tracks" });
+        }
+        break;
+      }
+
       case "clip/link": {
         const p = action.params as {
           clipId?: unknown;

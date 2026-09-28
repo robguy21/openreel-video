@@ -205,6 +205,12 @@ export interface ProjectState {
   trimClipEdge: (clipId: string, edge: "left" | "right", time: number) => Promise<ActionResult>;
   linkClips: (clipId: string, otherId: string) => Promise<ActionResult>;
   unlinkClip: (clipId: string) => Promise<ActionResult>;
+  /** Insert or Overwrite (docs/PROPOSAL_EDITOR_REDESIGN.md R7): a source's span at the
+   *  playhead, its picture and its sound linked, on the target rows. One undo step. */
+  placeFromSource: (
+    mode: "insert" | "overwrite",
+    source: { mediaId: string; inPoint: number | null; outPoint: number | null },
+  ) => Promise<ActionResult>;
   getClip: (clipId: string) => Clip | undefined;
   /** Shallow-merge metadata into a clip (undoable). */
   setClipMetadata: (

@@ -11,6 +11,7 @@ import {
 import { useStudioStore } from "../../../services/studio/studio-session";
 import { mediaPlaybackUrl } from "../../../services/media-playback-url";
 import { getPlaybackBridge } from "../../../bridges/playback-bridge";
+import { toast } from "../../../stores/notification-store";
 
 /**
  * The Reference monitor (docs/PROPOSAL_EDITOR_REDESIGN.md R5): the whole of one source,
@@ -94,6 +95,7 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
   const partLabel = useStudioStore((s) => s.partLabel);
   const project = useProjectStore((s) => s.project);
   const trimClip = useProjectStore((s) => s.trimClip);
+  const placeFromSource = useProjectStore((s) => s.placeFromSource);
 
   const mediaItem = useMemo(
     () =>
@@ -240,6 +242,26 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
     [clip, duration, frame, kind, marks, mediaItem, setMarks, source, time, trimClip],
   );
 
+  // Insert and Overwrite (R7): the marked span - or the whole source with no marks - at
+  // the Edit monitor's playhead. The part's cut is only for looking at: it is not a
+  // media item and is never placed.
+  const canPlace = !!source?.mediaId && source.origin !== "film";
+  const place = useCallback(
+    async (mode: "insert" | "overwrite") => {
+      if (!source?.mediaId || source.origin === "film") return;
+      mediaRef.current?.pause();
+      const result = await placeFromSource(mode, {
+        mediaId: source.mediaId,
+        inPoint: marks.in,
+        outPoint: marks.out,
+      });
+      if (!result.success) {
+        toast.error(mode === "insert" ? "Insert" : "Overwrite", result.error?.message ?? "It could not be placed");
+      }
+    },
+    [marks.in, marks.out, placeFromSource, source],
+  );
+
   const fullScreen = useCallback(() => {
     void frameRef.current?.requestFullscreen?.();
   }, []);
@@ -265,6 +287,8 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
       else if (key === "arrowright") step(1);
       else if (key === "i") void markAt("in");
       else if (key === "o") void markAt("out");
+      else if (key === ",") void place("insert");
+      else if (key === ".") void place("overwrite");
       else handled = false;
       if (handled) {
         e.preventDefault();
@@ -273,7 +297,7 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [focus, markAt, step, togglePlay]);
+  }, [focus, markAt, place, step, togglePlay]);
 
   const length = duration || mediaItem?.metadata?.duration || 0;
   const pct = (t: number | null) => (t === null || !length ? null : Math.min(100, Math.max(0, (t / length) * 100)));
@@ -323,6 +347,26 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
           {referenceSubtitle(source)}
         </span>
         <div className="flex-1" />
+        {canPlace && (
+          <>
+            <button
+              type="button"
+              onClick={() => void place("insert")}
+              className="or-control or-focus h-[30px] shrink-0 px-3 text-[12px]"
+              title="Insert at the playhead, moving what follows (,)"
+            >
+              Insert
+            </button>
+            <button
+              type="button"
+              onClick={() => void place("overwrite")}
+              className="or-control or-focus h-[30px] shrink-0 px-3 text-[12px]"
+              title="Overwrite at the playhead (.)"
+            >
+              Overwrite
+            </button>
+          </>
+        )}
         {film && source?.origin !== "film" && (
           <button
             type="button"

@@ -18,6 +18,7 @@ import type {
 import type { TransitionType } from "./effects";
 import type { Transition } from "./timeline";
 import type { BlendMode } from "../video/types";
+import type { SourceEditParams } from "../actions/source-edits";
 import type { EmphasisAnimation } from "../graphics/types";
 import type { ClipColorGrading } from "../video/color-grading-engine";
 import type { TextClip } from "../text/types";
@@ -202,6 +203,16 @@ export type ClipAction =
       };
     }
   | { type: "clip/rippleDelete"; params: { clipId: string } }
+  /** Insert: the source's marked span at the playhead, everything after it moved right
+   *  on every track (docs/PROPOSAL_EDITOR_REDESIGN.md R7.2). */
+  | { type: "clip/insertEdit"; params: SourceEditParams }
+  /** Overwrite: the span laid over whatever is on the target tracks there (R7.3). */
+  | { type: "clip/overwriteEdit"; params: SourceEditParams }
+  /** Undo of Insert and Overwrite: these tracks' clips and transitions, exactly. */
+  | {
+      type: "clip/restoreTracks";
+      params: { tracks: Array<{ trackId: string; clips: Clip[]; transitions: Transition[] }> };
+    }
   | {
       type: "clip/setBlendMode";
       params: { clipId: string; blendMode: BlendMode };

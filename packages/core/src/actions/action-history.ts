@@ -32,6 +32,8 @@ const ACTION_DESCRIPTIONS: Record<
   "clip/trim": () => "Trim clip",
   "clip/split": () => "Split clip",
   "clip/rippleDelete": () => "Ripple delete",
+  "clip/insertEdit": () => "Insert",
+  "clip/overwriteEdit": () => "Overwrite",
   "clip/duplicate": () => "Duplicate clip",
   "clip/link": (p) => (p.linkedClipId ? "Link picture and sound" : "Unlink picture and sound"),
   "clip/setBlendMode": () => "Change blend mode",

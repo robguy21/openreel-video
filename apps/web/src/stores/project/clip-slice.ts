@@ -58,6 +58,7 @@ export type ClipSlice = Pick<
   | "trimClipEdge"
   | "linkClips"
   | "unlinkClip"
+  | "placeFromSource"
   | "getClip"
   | "setClipMetadata"
   | "addMoment"
@@ -343,7 +344,7 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
             audioTrackCount = probeResult.audioStreamCount;
           }
         } catch {
-          // FFmpeg probe unavailable — proceed with count of 1
+          // FFmpeg probe unavailable â€” proceed with count of 1
         }
       }
 
@@ -652,6 +653,58 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
 
     unlinkClip: async (clipId: string) => run("clip/link", { clipId, linkedClipId: null }),
 
+    placeFromSource: async (mode, source) => {
+      const fail = (message: string): ActionResult => ({
+        success: false,
+        error: { code: "INVALID_PARAMS" as const, message },
+      });
+      const { project } = get();
+      const media = project.mediaLibrary.items.find((m) => m.id === source.mediaId);
+      if (!media) return fail("The Reference holds nothing that can be placed");
+      const length = media.metadata?.duration && media.metadata.duration > 0 ? media.metadata.duration : 5;
+      const inPoint = Math.max(0, source.inPoint ?? 0);
+      const outPoint = Math.min(length, source.outPoint ?? length);
+      if (!(outPoint - inPoint > 0.01)) return fail("Mark an In before the Out first");
+      const plan = await sourceEditPlan(get, media, soundFileFor);
+      if (typeof plan === "string") return fail(plan);
+      const at = Math.max(0, useTimelineStore.getState().playheadPosition);
+      return grouped(mode === "insert" ? "Insert" : "Overwrite", async () => {
+        let soundTrackId = plan.soundTrackId;
+        if (plan.soundMediaId && !soundTrackId && plan.newSoundTrack) {
+          soundTrackId = uuidv4();
+          const made = await run("track/add", {
+            trackType: "audio",
+            trackId: soundTrackId,
+            position: plan.newSoundTrack.position,
+            name: plan.newSoundTrack.name,
+          });
+          if (!made.success) return made;
+        }
+        const clips: Array<Record<string, unknown>> = [];
+        if (plan.pictureTrackId) {
+          clips.push({
+            clipId: uuidv4(),
+            trackId: plan.pictureTrackId,
+            mediaId: media.id,
+            inPoint,
+            outPoint,
+            // its sound is on the row below, as every studio shot's is
+            volume: plan.soundMediaId ? 0 : 1,
+          });
+        }
+        if (plan.soundMediaId && soundTrackId) {
+          clips.push({ clipId: uuidv4(), trackId: soundTrackId, mediaId: plan.soundMediaId, inPoint, outPoint });
+        }
+        if (!clips.length) return fail("There is no row to place it on");
+        const result = await run(mode === "insert" ? "clip/insertEdit" : "clip/overwriteEdit", { at, clips });
+        if (result.success) {
+          set({ project: { ...get().project, modifiedAt: Date.now() } });
+          useTimelineStore.getState().seekTo(at + (outPoint - inPoint));
+        }
+        return result;
+      });
+    },
+
     getClip: (clipId: string) => {
       const { project } = get();
       for (const track of project.timeline.tracks) {
@@ -660,5 +713,84 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
       }
       return undefined;
     },
+  };
+}
+
+interface SourceEditPlan {
+  /** The picture's row; absent for a sound-only source. */
+  pictureTrackId?: string;
+  /** The sound to lay beside it: the take's own sound file, or one made from the video. */
+  soundMediaId?: string;
+  soundTrackId?: string;
+  /** Where to make a sound row when the picture's row has none under it. */
+  newSoundTrack?: { position: number; name: string };
+}
+
+const isVisualRow = (t: Track) => t.type === "video" || t.type === "image";
+
+/**
+ * The target rows of Insert and Overwrite (R7.1): the selected clip's row, else the first
+ * picture row (`Shots` in a studio film, which is under its Crossfades rows); for the
+ * sound, the audio row directly under the picture's (`Shot sound`), made when there is
+ * none. A studio take's sound is the lossless file its clips are already linked to; any
+ * other video's is extracted to a file of its own (R7.6), and a video never goes on a
+ * sound row.
+ */
+async function sourceEditPlan(
+  get: Get,
+  media: MediaItem,
+  soundFileFor: (video: MediaItem, index: number) => Promise<string | null>,
+): Promise<SourceEditPlan | string> {
+  const { project } = get();
+  const tracks = project.timeline.tracks;
+  const usable = (t: Track | undefined): t is Track => !!t && !t.locked;
+  const selected = useUIStore
+    .getState()
+    .selectedItems.map((i) => (i.type === "clip" ? findClip(project, i.id) : undefined))
+    .find(Boolean);
+  const selectedTrack = usable(tracks.find((t) => t.id === selected?.trackId))
+    ? tracks.find((t) => t.id === selected?.trackId)
+    : undefined;
+
+  if (media.type === "audio") {
+    const row =
+      (selectedTrack?.type === "audio" ? selectedTrack : undefined) ??
+      tracks.find((t) => usable(t) && t.type === "audio");
+    return row ? { soundMediaId: media.id, soundTrackId: row.id } : "Add a sound row first";
+  }
+
+  const pictureRow =
+    (selectedTrack && isVisualRow(selectedTrack) ? selectedTrack : undefined) ??
+    tracks.find((t) => usable(t) && isVisualRow(t) && t.name === "Shots") ??
+    tracks.find((t) => usable(t) && isVisualRow(t));
+  if (!pictureRow) return "Add a picture row first";
+  if (media.type !== "video") return { pictureTrackId: pictureRow.id };
+
+  // The take's own sound: what its clips are linked to already.
+  let soundMediaId: string | undefined;
+  for (const t of tracks) {
+    for (const c of t.clips) {
+      if (c.mediaId !== media.id) continue;
+      const partner = partnerOf(project, c.id);
+      const partnerMedia = partner && project.mediaLibrary.items.find((m) => m.id === partner.mediaId);
+      if (partnerMedia?.type === "audio") soundMediaId = partnerMedia.id;
+    }
+  }
+  if (!soundMediaId && (media.metadata?.channels ?? 0) > 0) {
+    soundMediaId = (await soundFileFor(media, 0)) ?? undefined;
+    if (!soundMediaId) return "The source's sound could not be made into a file of its own";
+  }
+  if (!soundMediaId) return { pictureTrackId: pictureRow.id };
+
+  const tracksNow = get().project.timeline.tracks;
+  const index = tracksNow.findIndex((t) => t.id === pictureRow.id);
+  const below = tracksNow[index + 1];
+  if (usable(below) && below.type === "audio") {
+    return { pictureTrackId: pictureRow.id, soundMediaId, soundTrackId: below.id };
+  }
+  return {
+    pictureTrackId: pictureRow.id,
+    soundMediaId,
+    newSoundTrack: { position: index + 1, name: `${pictureRow.name} sound` },
   };
 }

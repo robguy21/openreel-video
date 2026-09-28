@@ -20,7 +20,6 @@ import {
   Minimize2,
   Move,
   Loader2,
-  ZoomIn,
   Proportions,
   Magnet,
   Zap,
@@ -837,11 +836,18 @@ interface ClipWithPlaceholder {
   isPlaceholder?: boolean;
 }
 
+/** The monitor's zoom as its header's Fit control sees it (R6.1). 1 fits the frame. */
+export interface MonitorZoom {
+  level: number;
+  options: ReadonlyArray<{ label: string; value: number }>;
+  set: (level: number) => void;
+}
+
 export interface PreviewProps {
   /** Drawn in place of the "Player" strip: the editor's Edit monitor header
    *  (docs/PROPOSAL_EDITOR_REDESIGN.md R6.1). Hidden, as the strip was, when maximised
-   *  or full screen. */
-  header?: React.ReactNode;
+   *  or full screen. A function is handed the monitor's zoom, for the Fit control. */
+  header?: React.ReactNode | ((zoom: MonitorZoom) => React.ReactNode);
 }
 
 export const Preview: React.FC<PreviewProps> = ({ header }) => {
@@ -1002,7 +1008,6 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
   const [isMaximized, setIsMaximized] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
   const [showCompositionGrid, setShowCompositionGrid] = useState(false);
@@ -7594,7 +7599,11 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
       className="w-full h-full min-h-0 min-w-0 bg-stage-bg flex flex-col relative group overflow-hidden outline-none"
     >
       {/* ── Panel bar header (mockup: 'Player') ───────────────── */}
-      {!isMaximized && !isFullscreen && header}
+      {!isMaximized &&
+        !isFullscreen &&
+        (typeof header === "function"
+          ? header({ level: zoomLevel, options: ZOOM_OPTIONS, set: setZoomLevel })
+          : header)}
       {!isMaximized && !isFullscreen && !header && (
         <div className="flex items-center px-3.5 py-2 border-b border-border bg-bg-1 gap-2.5 min-h-[38px] shrink-0">
           <Text type="label" color="primary" weight="semibold" className="text-[13px] tracking-tight text-fg m-0">Player</Text>
@@ -8307,49 +8316,6 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
                       }}
                       className={`w-full px-3 py-1.5 text-[11px] font-mono text-left hover:bg-hover transition-colors ${
                         playbackQuality === opt.value
-                          ? "text-accent"
-                          : "text-fg-2"
-                      }`}
-                    >
-                      {opt.label}
-                    </Button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Zoom Control */}
-          <div className="relative">
-            <Button
-              label="Preview Zoom"
-              variant="ghost"
-              onClick={() => setShowZoomMenu(!showZoomMenu)}
-              className="flex items-center gap-1.5 rounded-[7px] bg-bg-2 px-[11px] py-[7px] text-[12px] font-medium text-fg-2 hover:bg-bg-3 hover:text-fg transition-colors"
-            >
-              <div className="flex items-center gap-1">
-                <ZoomIn size={12} />
-                <span>{Math.round(zoomLevel * 100)}%</span>
-              </div>
-            </Button>
-            {showZoomMenu && (
-              <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setShowZoomMenu(false)}
-                />
-                <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-bg-elev border border-border rounded-md shadow-md py-1 z-50 min-w-[80px]">
-                  {ZOOM_OPTIONS.map((opt) => (
-                    <Button
-                      key={opt.value}
-                      label={opt.label}
-                      variant="ghost"
-                      onClick={() => {
-                        setZoomLevel(opt.value);
-                        setShowZoomMenu(false);
-                      }}
-                      className={`w-full px-3 py-1.5 text-[11px] font-mono text-left hover:bg-hover transition-colors ${
-                        zoomLevel === opt.value
                           ? "text-accent"
                           : "text-fg-2"
                       }`}

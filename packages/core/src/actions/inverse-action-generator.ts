@@ -439,6 +439,18 @@ export class InverseActionGenerator {
         });
       }
 
+      case "clip/insertEdit":
+      case "clip/overwriteEdit": {
+        // Every track, as it was: Insert moves clips on all of them.
+        return this.createInverseAction(action, "clip/restoreTracks", {
+          tracks: timeline.tracks.map((t) => ({
+            trackId: t.id,
+            clips: structuredClone(t.clips),
+            transitions: structuredClone(t.transitions ?? []),
+          })),
+        });
+      }
+
       case "clip/rippleDelete": {
         const clip = this.findClip(timeline, action.params.clipId);
         if (!clip) return null;

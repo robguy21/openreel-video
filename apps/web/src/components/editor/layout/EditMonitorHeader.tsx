@@ -2,6 +2,8 @@ import React from "react";
 import { useProjectStore } from "../../../stores/project-store";
 import { useStudioStore } from "../../../services/studio/studio-session";
 import { ProjectSwitcher } from "../ProjectSwitcher";
+import type { MonitorZoom } from "../Preview";
+import { FitControl } from "./FitControl";
 
 /**
  * The Edit monitor's header, on the monitor's own glass (docs/PROPOSAL_EDITOR_REDESIGN.md
@@ -15,7 +17,7 @@ export function monitorSubtitle(name: string, partLabel: string): string {
   return `${film}, as cut`;
 }
 
-export const EditMonitorHeader: React.FC = () => {
+export const EditMonitorHeader: React.FC<{ zoom?: MonitorZoom }> = ({ zoom }) => {
   const pid = useStudioStore((s) => s.pid);
   const name = useStudioStore((s) => s.name);
   const partLabel = useStudioStore((s) => s.partLabel);
@@ -35,6 +37,12 @@ export const EditMonitorHeader: React.FC = () => {
             {projectName}
           </span>
           <ProjectSwitcher />
+        </>
+      )}
+      {zoom && (
+        <>
+          <div className="flex-1" />
+          <FitControl zoom={zoom} />
         </>
       )}
     </div>

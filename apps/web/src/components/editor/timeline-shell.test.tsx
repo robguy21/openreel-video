@@ -67,6 +67,6 @@ describe("the keyboard shortcuts list", () => {
     render(<KeyboardShortcutsOverlay isOpen onClose={() => undefined} />);
     expect(screen.getByText("Monitors and linked clips")).toBeTruthy();
     for (const f of FIXED_SHORTCUTS) expect(screen.getByText(f.name)).toBeTruthy();
-    expect(FIXED_SHORTCUTS.map((f) => f.keys)).toEqual(["Space", "←", "→", "I", "O", "Alt + click"]);
+    expect(FIXED_SHORTCUTS.map((f) => f.keys)).toEqual(["Space", "←", "→", "I", "O", ",", ".", "Alt + click"]);
   });
 });

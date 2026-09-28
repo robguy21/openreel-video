@@ -34,6 +34,8 @@ export const FIXED_SHORTCUTS: ReadonlyArray<{ keys: string; name: string; descri
   { keys: "→", name: "Frame forward in the monitor", description: "In the monitor clicked last" },
   { keys: "I", name: "Mark In", description: "In the Reference: a clip's In, which trims it" },
   { keys: "O", name: "Mark Out", description: "In the Reference: a clip's Out, which trims it" },
+  { keys: ",", name: "Insert", description: "In the Reference: its span at the playhead, moving what follows" },
+  { keys: ".", name: "Overwrite", description: "In the Reference: its span over what is at the playhead" },
   { keys: "Alt + click", name: "Select one side of a linked pair", description: "The picture or its sound alone" },
 ];
 

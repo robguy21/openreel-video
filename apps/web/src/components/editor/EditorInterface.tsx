@@ -391,7 +391,7 @@ export const EditorInterface: React.FC = () => {
                   className="or-glass or-see-through flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
                 >
                   <PanelErrorBoundary name="Stage">
-                    <Preview header={<EditMonitorHeader />} />
+                    <Preview header={(zoom) => <EditMonitorHeader zoom={zoom} />} />
                   </PanelErrorBoundary>
                 </section>
               }

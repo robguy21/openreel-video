@@ -1,3 +1,4 @@
+import { insertEdit, overwriteEdit, type SourceEditParams } from "./source-edits";
 import type {
   Action,
   ActionResult,
@@ -1020,6 +1021,30 @@ export class ActionExecutor {
             return { ...track, clips: [...filteredClips, params.originalClip] };
           }
           return track;
+        });
+        break;
+      }
+
+      case "clip/insertEdit": {
+        timeline.tracks = insertEdit(timeline.tracks, action.params as SourceEditParams) as MutableTrack[];
+        break;
+      }
+
+      case "clip/overwriteEdit": {
+        timeline.tracks = overwriteEdit(timeline.tracks, action.params as SourceEditParams) as MutableTrack[];
+        break;
+      }
+
+      case "clip/restoreTracks": {
+        const params = action.params as {
+          tracks: Array<{ trackId: string; clips: Clip[]; transitions: Transition[] }>;
+        };
+        const byId = new Map(params.tracks.map((t) => [t.trackId, t]));
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => {
+          const saved = byId.get(track.id);
+          return saved
+            ? { ...track, clips: structuredClone(saved.clips), transitions: structuredClone(saved.transitions) }
+            : track;
         });
         break;
       }
