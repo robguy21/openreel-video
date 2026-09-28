@@ -58,7 +58,9 @@ export interface StudioShot {
   length_frames: number | null;
   line: { kind?: string; text?: string; subject_id?: string };
   take_id: string | null;
-  video: StudioMediaRef | null;
+  /** `frames` is the video's own picture count, from the studio's probe record: what the
+   *  clip is placed by. Absent from a studio before it, and null where it was not counted. */
+  video: (StudioMediaRef & { frames?: number | null }) | null;
   /** The take's lossless sound, sample-for-sample what its mp4 carries. */
   audio?: (StudioMediaRef & { source?: string }) | null;
   narration: (Partial<StudioMediaRef> & { text: string; stale: boolean }) | null;
@@ -92,6 +94,11 @@ export interface StudioManifest {
     };
   };
   fps: number;
+  /** How the Film stitch lays a narration: it starts this many milliseconds into its
+   *  shot's part, and the take's own sound plays at `narration_duck` for the whole of that
+   *  part. Absent from a studio before them: laid at the shot's start over full sound. */
+  narration_delay_ms?: number;
+  narration_duck?: number;
   shots: StudioShot[];
   stitch_export: StudioMediaRef | null;
   editor_export: StudioMediaRef | null;

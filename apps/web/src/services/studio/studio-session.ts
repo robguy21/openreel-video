@@ -268,8 +268,12 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
   const fps = manifest.fps || 24;
   // The shots whose sound is laid under the next one's start: known from the manifest
   // alone, so only those masters are downloaded.
+  const timing = {
+    narrationDelayMs: manifest.narration_delay_ms,
+    narrationDuck: manifest.narration_duck,
+  };
   const soundFrom = new Set(
-    planTimeline(all, fps, (s) => s.video?.duration_s || 0).leadIns.map((x) => x.from),
+    planTimeline(all, fps, (s) => s.video?.duration_s || 0, timing).leadIns.map((x) => x.from),
   );
 
   // Download everything first so the project canvas can match the first take.
@@ -342,44 +346,59 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
   }
   set({ media });
 
-  // Lay out: one video track in shot order, each clip trimmed to its cut points, narration
-  // on an audio track underneath, the lead-ins on one of their own, the studio's per-shot
-  // gap and crossfade honoured where the seam is a cut.
+  // Lay out: the shots in order on one video track, each trimmed to its cut points, and a
+  // track above it wherever a crossfade overlaps two of them; narration on an audio track
+  // underneath, the lead-ins on one of their own. Every time and level is `planTimeline`'s,
+  // which is the Film stitch's rule.
   progress("Building timeline…", 0.92);
-  const plan = planTimeline(all, fps, (s, i) => {
-    const id = imported.get(i)?.videoId;
-    return (id && useProjectStore.getState().getMediaItem(id)?.metadata.duration) || s.video?.duration_s || 0;
-  });
+  const plan = planTimeline(
+    all,
+    fps,
+    (s, i) => {
+      const id = imported.get(i)?.videoId;
+      return (id && useProjectStore.getState().getMediaItem(id)?.metadata.duration) || s.video?.duration_s || 0;
+    },
+    { ...timing, narrated: (_s, i) => Boolean(imported.get(i)?.narrationId) },
+  );
   const leadIns = plan.leadIns.filter((x) => imported.get(x.from)?.soundId);
-  const videoTrackId = `track-${uuidv4()}`;
+  const laneTracks = [`track-${uuidv4()}`];
   const audioTrackId = `track-${uuidv4()}`;
   const seamTrackId = `track-${uuidv4()}`;
-  await useProjectStore.getState().addTrack("video", undefined, { trackId: videoTrackId, name: "Shots" });
-  if ([...imported.values()].some((x) => x.narrationId)) {
+  await useProjectStore.getState().addTrack("video", undefined, { trackId: laneTracks[0], name: "Shots" });
+  // Each lane above the first is a track above the one before it (the first track in the
+  // list is drawn on top), so a clip that fades in over another is always the upper one.
+  for (let lane = 1; lane < plan.lanes; lane++) {
+    laneTracks.push(`track-${uuidv4()}`);
+    await useProjectStore.getState().addTrack("video", 0, {
+      trackId: laneTracks[lane],
+      name: plan.lanes > 2 ? `Crossfades ${lane}` : "Crossfades",
+    });
+  }
+  if (plan.narrations.length) {
     await useProjectStore.getState().addTrack("audio", undefined, { trackId: audioTrackId, name: "Narration" });
   }
   if (leadIns.length) {
     await useProjectStore.getState().addTrack("audio", undefined, { trackId: seamTrackId, name: "Seam sound" });
   }
 
-  let prevClipId: string | null = null;
   for (const c of plan.clips) {
     const ids = imported.get(c.shot)!;
     const clip = await placeClip({
-      trackId: videoTrackId,
+      trackId: laneTracks[c.lane],
       mediaId: ids.videoId,
       startTime: c.startTime,
       inPoint: c.inPoint,
       outPoint: c.outPoint,
+      volume: c.volume,
+      fade: c.soundFadeIn || c.soundFadeOut ? { fadeIn: c.soundFadeIn, fadeOut: c.soundFadeOut } : undefined,
     });
     if (!clip) throw new Error(`Could not place ${all[c.shot].summary}`);
-    if (ids.narrationId) {
-      await useProjectStore.getState().addClip(audioTrackId, ids.narrationId, c.startTime);
-    }
-    if (prevClipId && c.crossfadeIn > 0) {
-      await addTransition(prevClipId, clip, "crossfade", c.crossfadeIn);
-    }
-    prevClipId = clip;
+    if (c.pictureIn > 0) await addEdgeFade(clip, "in", c.pictureIn);
+    if (c.pictureOut > 0) await addEdgeFade(clip, "out", c.pictureOut);
+  }
+  for (const n of plan.narrations) {
+    const id = imported.get(n.shot)?.narrationId;
+    if (id) await useProjectStore.getState().addClip(audioTrackId, id, n.startTime);
   }
   for (const x of leadIns) {
     await placeClip({
@@ -388,6 +407,7 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
       startTime: x.startTime,
       inPoint: x.inPoint,
       outPoint: x.inPoint + x.duration,
+      volume: x.volume,
       fade: { fadeIn: 0, fadeOut: x.duration },
     });
   }
@@ -405,6 +425,7 @@ async function placeClip(params: {
   startTime: number;
   inPoint: number;
   outPoint: number;
+  volume?: number;
   fade?: { fadeIn: number; fadeOut: number };
 }): Promise<string | null> {
   const { project, actionExecutor } = useProjectStore.getState();
@@ -424,21 +445,21 @@ async function placeClip(params: {
   return clipId;
 }
 
-async function addTransition(clipAId: string, clipBId: string, transitionType: string, duration: number) {
-  const { project, actionExecutor } = useProjectStore.getState();
-  const copy = structuredClone(project);
-  const result = await actionExecutor.execute(
-    {
-      type: "transition/add",
-      id: uuidv4(),
-      timestamp: Date.now(),
-      params: { clipAId, clipBId, transitionType, duration },
-    },
-    copy,
-  );
-  if (result.success) {
-    useProjectStore.setState({ project: { ...copy, modifiedAt: Date.now() } });
-  }
+/**
+ * The picture half of a crossfade: the fork's own edge transition on the clip on top, so it
+ * fades in over (or out over) whatever is under it - the clip it overlaps, or black. The
+ * sound half is each clip's own fade (`placeClip`), so `audioFade` stays off here rather
+ * than fading the top clip's sound a second time.
+ */
+async function addEdgeFade(clipId: string, edge: "in" | "out", duration: number) {
+  await useProjectStore.getState().addClipTransition({
+    id: `transition-${uuidv4()}`,
+    clipAId: clipId,
+    edge,
+    type: "crossfade",
+    duration,
+    params: { audioFade: false },
+  });
 }
 
 // ─── Restoring a saved edit ─────────────────────────────────────────────────
