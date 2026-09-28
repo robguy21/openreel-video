@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ActionExecutor } from "./action-executor";
 import type { Project } from "../types/project";
 import type { Action } from "../types/actions";
@@ -304,6 +304,105 @@ describe("ActionExecutor clip/trim", () => {
     expect(clip()).toMatchObject({ inPoint: 1, outPoint: 3, duration: 2 });
     await executor.undo(project);
     expect(clip()).toMatchObject({ inPoint: 1, outPoint: 5, duration: 4 });
+  });
+});
+
+describe("ActionExecutor history groups", () => {
+  it("undoes two groups begun in the same millisecond one at a time", async () => {
+    const executor = new ActionExecutor();
+    const project = makeProjectWithClip({ startTime: 0 });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      for (const start of [1, 2]) {
+        executor.getHistory().beginGroup("move");
+        await executor.execute({
+          id: `m${start}`, type: "clip/move", timestamp: start,
+          params: { clipId: "c1", startTime: start },
+        } as Action, project);
+        executor.getHistory().endGroup();
+      }
+    } finally {
+      now.mockRestore();
+    }
+    await executor.undo(project);
+    expect(project.timeline.tracks[0].clips[0].startTime).toBe(1);
+    await executor.undo(project);
+    expect(project.timeline.tracks[0].clips[0].startTime).toBe(0);
+  });
+});
+
+describe("ActionExecutor clip/link", () => {
+  function threeClips(): Project {
+    const project = makeProjectWithClip({ id: "a" });
+    const base = project.timeline.tracks[0].clips[0];
+    (project.timeline.tracks[0] as { clips: unknown[] }).clips = [
+      base,
+      { ...base, id: "b", startTime: 10 },
+      { ...base, id: "c", startTime: 20 },
+    ];
+    return project;
+  }
+  const linkOf = (p: Project, id: string) =>
+    p.timeline.tracks[0].clips.find((c) => c.id === id)?.linkedClipId;
+  const act = (params: Record<string, unknown>, id = "l") =>
+    ({ id, type: "clip/link", timestamp: Date.now(), params }) as unknown as Action;
+
+  it("links two clips each to the other, and undo unlinks them", async () => {
+    const executor = new ActionExecutor();
+    const p = threeClips();
+    expect((await executor.execute(act({ clipId: "a", linkedClipId: "b" }), p)).success).toBe(true);
+    expect([linkOf(p, "a"), linkOf(p, "b"), linkOf(p, "c")]).toEqual(["b", "a", undefined]);
+    await executor.undo(p);
+    expect([linkOf(p, "a"), linkOf(p, "b")]).toEqual([undefined, undefined]);
+    await executor.redo(p);
+    expect([linkOf(p, "a"), linkOf(p, "b")]).toEqual(["b", "a"]);
+  });
+
+  it("unlinks both sides, and a relink leaves the old partner alone, all undoable", async () => {
+    const executor = new ActionExecutor();
+    const p = threeClips();
+    await executor.execute(act({ clipId: "a", linkedClipId: "b" }, "l1"), p);
+    await executor.execute(act({ clipId: "a", linkedClipId: "c" }, "l2"), p);
+    expect([linkOf(p, "a"), linkOf(p, "b"), linkOf(p, "c")]).toEqual(["c", undefined, "a"]);
+    await executor.undo(p);
+    expect([linkOf(p, "a"), linkOf(p, "b"), linkOf(p, "c")]).toEqual(["b", "a", undefined]);
+    await executor.execute(act({ clipId: "b", linkedClipId: null }, "l3"), p);
+    expect([linkOf(p, "a"), linkOf(p, "b")]).toEqual([undefined, undefined]);
+    await executor.undo(p);
+    expect([linkOf(p, "a"), linkOf(p, "b")]).toEqual(["b", "a"]);
+  });
+
+  it("refuses a clip that is not there, or a clip linked to itself", async () => {
+    const executor = new ActionExecutor();
+    const p = threeClips();
+    expect((await executor.execute(act({ clipId: "a", linkedClipId: "zz" }), p)).success).toBe(false);
+    expect((await executor.execute(act({ clipId: "a", linkedClipId: "a" }), p)).success).toBe(false);
+  });
+
+  it("gives a split's right half no partner and the id it was asked for", async () => {
+    const executor = new ActionExecutor();
+    const p = threeClips();
+    await executor.execute(act({ clipId: "a", linkedClipId: "b" }), p);
+    await executor.execute({
+      id: "s", type: "clip/split", timestamp: Date.now(),
+      params: { clipId: "a", time: 2, newClipId: "a2" },
+    } as Action, p);
+    expect(linkOf(p, "a")).toBe("b");
+    expect(p.timeline.tracks[0].clips.find((c) => c.id === "a2")).toBeDefined();
+    expect(linkOf(p, "a2")).toBeUndefined();
+  });
+
+  it("does not carry a link into a copy", async () => {
+    const executor = new ActionExecutor();
+    const p = threeClips();
+    await executor.execute(act({ clipId: "a", linkedClipId: "b" }), p);
+    const source = p.timeline.tracks[0].clips.find((c) => c.id === "a")!;
+    await executor.execute({
+      id: "d", type: "clip/add", timestamp: Date.now(),
+      params: { trackId: "t1", mediaId: "m1", startTime: 30, sourceClip: source, clipId: "a-copy" },
+    } as Action, p);
+    expect(linkOf(p, "a-copy")).toBeUndefined();
+    expect(linkOf(p, "a")).toBe("b");
   });
 });
 

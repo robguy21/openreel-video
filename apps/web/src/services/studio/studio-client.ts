@@ -156,6 +156,21 @@ export async function fetchManifest(ref: StudioRef): Promise<StudioManifest> {
   );
 }
 
+/**
+ * Put the part's saved edit aside in the studio (`editor/refresh_sources` keeps it as a
+ * file) so the next layout is a fresh one - "Rebuild from the film". A part with no saved
+ * edit has nothing to put aside, and that is not a failure.
+ */
+export async function archiveSavedEdit(ref: StudioRef): Promise<void> {
+  const res = await fetch(projectUrl(ref, "editor/refresh_sources"), {
+    method: "POST",
+    headers: { ...MUTATING_HEADERS },
+    credentials: CREDENTIALS,
+  });
+  if (res.ok || res.status === 400) return;
+  await json(res);
+}
+
 export async function prepareNarration(
   ref: StudioRef,
 ): Promise<{

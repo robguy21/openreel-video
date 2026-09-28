@@ -800,6 +800,31 @@ export class ActionValidator {
         }
         break;
 
+      case "clip/link": {
+        const p = action.params as {
+          clipId?: unknown;
+          linkedClipId?: unknown;
+          restore?: unknown;
+        };
+        if (p.restore !== undefined) {
+          if (!Array.isArray(p.restore)) {
+            errors.push({ code: "INVALID_PARAMS", message: "restore must be a list", path: "params.restore" });
+          }
+          break;
+        }
+        if (typeof p.clipId !== "string" || !this.findClip(timeline, p.clipId)) {
+          errors.push({ code: "CLIP_NOT_FOUND", message: `Clip with ID ${String(p.clipId)} not found`, path: "params.clipId" });
+        }
+        if (p.linkedClipId !== null) {
+          if (typeof p.linkedClipId !== "string" || !this.findClip(timeline, p.linkedClipId)) {
+            errors.push({ code: "CLIP_NOT_FOUND", message: `Clip with ID ${String(p.linkedClipId)} not found`, path: "params.linkedClipId" });
+          } else if (p.linkedClipId === p.clipId) {
+            errors.push({ code: "INVALID_PARAMS", message: "A clip cannot be linked to itself", path: "params.linkedClipId" });
+          }
+        }
+        break;
+      }
+
       case "clip/setBlendMode":
       case "clip/setBlendOpacity":
       case "clip/setEmphasisAnimation":

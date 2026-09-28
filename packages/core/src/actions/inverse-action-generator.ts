@@ -454,6 +454,36 @@ export class InverseActionGenerator {
         });
       }
 
+      case "clip/link": {
+        // Every clip the link can touch - the two named and whoever each was paired with -
+        // put back exactly as it was.
+        const touched = new Set<string>();
+        const params = action.params as {
+          clipId: string;
+          linkedClipId: string | null;
+          restore?: Array<{ clipId: string; linkedClipId: string | null }>;
+        };
+        if (params.restore) {
+          for (const r of params.restore) touched.add(r.clipId);
+        } else {
+          for (const id of [params.clipId, params.linkedClipId]) {
+            if (!id) continue;
+            touched.add(id);
+            const c = this.findClip(timeline, id);
+            if (c?.linkedClipId) touched.add(c.linkedClipId);
+          }
+        }
+        const restore = [...touched].map((id) => ({
+          clipId: id,
+          linkedClipId: this.findClip(timeline, id)?.linkedClipId ?? null,
+        }));
+        return this.createInverseAction(action, "clip/link", {
+          clipId: params.clipId,
+          linkedClipId: null,
+          restore,
+        });
+      }
+
       case "clip/setBlendMode": {
         const clip = this.findClip(timeline, action.params.clipId);
         if (!clip) return null;

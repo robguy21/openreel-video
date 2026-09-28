@@ -62,6 +62,8 @@ import { createTextGraphicsSlice } from "./project/text-graphics-slice";
 import { createHistorySlice } from "./project/history-slice";
 import { createClipSlice } from "./project/clip-slice";
 import { createTimelineItemSlice } from "./project/timeline-item-slice";
+import { partnerOf } from "./project/linked-clips";
+import { setLinkResolver, useUIStore } from "./ui-store";
 import { v4 as uuidv4 } from "uuid";
 import type {
   VideoEffect,
@@ -244,6 +246,12 @@ export interface ProjectState {
     playheadTime: number,
     trimStart: boolean,
   ) => Promise<ActionResult>;
+  /** A drag of a clip's edge to `time`: the head or tail comes off (or back), the frames
+   *  stay where they are, and the linked partner trims with it. */
+  trimClipEdge: (clipId: string, edge: "left" | "right", time: number) => Promise<ActionResult>;
+  /** Link two clips as a picture and its sound; `unlinkClip` lets a pair go. */
+  linkClips: (clipId: string, otherId: string) => Promise<ActionResult>;
+  unlinkClip: (clipId: string) => Promise<ActionResult>;
   getClip: (clipId: string) => Clip | undefined;
   /** Shallow-merge metadata into a clip (undoable). */
   setClipMetadata: (
@@ -2197,6 +2205,8 @@ export const useProjectStore = create<ProjectState>()(
         const minStartTime = Math.min(
           ...clipboard.map((item) => item.clip.startTime),
         );
+        // Which pasted clip each copied one became, to link the copies of a pair.
+        const copyOf = new Map<string, string>();
         actionExecutor.getHistory().beginGroup("Paste timeline clips");
         try {
           for (const item of clipboard) {
@@ -2314,8 +2324,27 @@ export const useProjectStore = create<ProjectState>()(
               const pasted = placedTrack?.clips.find(
                 (clip) => !beforeIds.has(clip.id),
               );
-              if (pasted) pastedIds.push(pasted.id);
+              if (pasted) {
+                pastedIds.push(pasted.id);
+                copyOf.set(item.clip.id, pasted.id);
+              }
             }
+          }
+          // A pair copied whole is pasted as a pair (R8.6).
+          for (const item of clipboard) {
+            if (item.kind !== "media" || !item.clip.linkedClipId) continue;
+            const mine = copyOf.get(item.clip.id);
+            const theirs = copyOf.get(item.clip.linkedClipId);
+            if (!mine || !theirs || item.clip.id > item.clip.linkedClipId) continue;
+            await actionExecutor.execute(
+              {
+                type: "clip/link",
+                id: uuidv4(),
+                timestamp: Date.now(),
+                params: { clipId: mine, linkedClipId: theirs },
+              } as Action,
+              get().project,
+            );
           }
         } finally {
           actionExecutor.getHistory().endGroup();
@@ -2344,9 +2373,9 @@ export const useProjectStore = create<ProjectState>()(
           };
         }
 
-        const track = project.timeline.tracks.find((t) =>
-          t.clips.some((c) => c.id === clipId),
-        );
+        const trackOf = (c: Clip) =>
+          project.timeline.tracks.find((t) => t.clips.some((x) => x.id === c.id));
+        const track = trackOf(clip);
         if (!track) {
           return {
             success: false,
@@ -2361,55 +2390,95 @@ export const useProjectStore = create<ProjectState>()(
         // track. If there's a clip already starting at that time, scan
         // forward until we find the next gap large enough for the
         // duplicate's full duration.
-        const sortedClips = [...track.clips].sort(
-          (a, b) => a.startTime - b.startTime,
-        );
-        let candidate = clip.startTime + clip.duration;
         const epsilon = 0.0001;
-        for (const other of sortedClips) {
-          if (other.id === clip.id) continue;
-          if (other.startTime + other.duration <= candidate + epsilon) continue;
-          if (other.startTime >= candidate + clip.duration - epsilon) break;
-          candidate = other.startTime + other.duration;
+        const firstGap = (c: Clip, clips: readonly Clip[], from: number) => {
+          const sortedClips = [...clips].sort((x, y) => x.startTime - y.startTime);
+          let candidate = from;
+          for (const other of sortedClips) {
+            if (other.id === c.id) continue;
+            if (other.startTime + other.duration <= candidate + epsilon) continue;
+            if (other.startTime >= candidate + c.duration - epsilon) break;
+            candidate = other.startTime + other.duration;
+          }
+          return candidate;
+        };
+
+        // A linked pair is duplicated as a pair (R8.6): both copies at one offset, after
+        // both originals, and linked to each other.
+        const partner = useUIStore.getState().linkAlone
+          ? undefined
+          : partnerOf(project, clipId);
+        const partnerTrack = partner ? trackOf(partner) : undefined;
+        let start = firstGap(clip, track.clips, clip.startTime + clip.duration);
+        if (partner && partnerTrack) {
+          const offset = partner.startTime - clip.startTime;
+          // Keep looking until the copy fits on both rows at the same offset.
+          for (let guard = 0; guard < 1000; guard++) {
+            const onPartner = firstGap(partner, partnerTrack.clips, start + offset) - offset;
+            const onClip = firstGap(clip, track.clips, onPartner);
+            if (Math.abs(onClip - start) < epsilon && Math.abs(onPartner - start) < epsilon) break;
+            start = Math.max(onClip, onPartner);
+          }
         }
 
-        const projectCopy = structuredClone(project);
-        const action: Action = {
+        const copyOf = (c: Clip, trackId: string, at: number, newId: string): Action => ({
           type: "clip/add",
           id: uuidv4(),
           timestamp: Date.now(),
           params: {
-            trackId: track.id,
-            mediaId: clip.mediaId,
-            startTime: candidate,
-            duration: clip.duration,
-            inPoint: clip.inPoint,
-            outPoint: clip.outPoint,
-            volume: clip.volume,
-            effects: structuredClone(clip.effects),
-            audioEffects: clip.audioEffects
-              ? structuredClone(clip.audioEffects)
-              : undefined,
-            keyframes: clip.keyframes ? structuredClone(clip.keyframes) : undefined,
-            transform: clip.transform ? structuredClone(clip.transform) : undefined,
-            ...(clip.fade ? { fade: clip.fade } : {}),
-            ...(clip.speed !== undefined ? { speed: clip.speed } : {}),
-            ...(clip.reversed !== undefined ? { reversed: clip.reversed } : {}),
-            ...(clip.audioTrackIndex !== undefined
-              ? { audioTrackIndex: clip.audioTrackIndex }
-              : {}),
+            clipId: newId,
+            trackId,
+            mediaId: c.mediaId,
+            startTime: at,
+            duration: c.duration,
+            inPoint: c.inPoint,
+            outPoint: c.outPoint,
+            volume: c.volume,
+            effects: structuredClone(c.effects),
+            audioEffects: c.audioEffects ? structuredClone(c.audioEffects) : undefined,
+            keyframes: c.keyframes ? structuredClone(c.keyframes) : undefined,
+            transform: c.transform ? structuredClone(c.transform) : undefined,
+            ...(c.fade ? { fade: c.fade } : {}),
+            ...(c.speed !== undefined ? { speed: c.speed } : {}),
+            ...(c.reversed !== undefined ? { reversed: c.reversed } : {}),
+            ...(c.audioTrackIndex !== undefined ? { audioTrackIndex: c.audioTrackIndex } : {}),
           },
-        };
+        });
 
-        const result = await actionExecutor.execute(action, projectCopy);
-        if (result.success) {
-          const finalProject: Project = {
-            ...projectCopy,
-            modifiedAt: Date.now(),
-          };
-          set({ project: finalProject });
+        const history = actionExecutor.getHistory();
+        history.beginGroup("Duplicate clip");
+        try {
+          const projectCopy = structuredClone(project);
+          const copyId = uuidv4();
+          const result = await actionExecutor.execute(
+            copyOf(clip, track.id, start, copyId),
+            projectCopy,
+          );
+          if (result.success && partner && partnerTrack) {
+            const partnerCopyId = uuidv4();
+            const second = await actionExecutor.execute(
+              copyOf(partner, partnerTrack.id, start + (partner.startTime - clip.startTime), partnerCopyId),
+              projectCopy,
+            );
+            if (second.success) {
+              await actionExecutor.execute(
+                {
+                  type: "clip/link",
+                  id: uuidv4(),
+                  timestamp: Date.now(),
+                  params: { clipId: copyId, linkedClipId: partnerCopyId },
+                } as Action,
+                projectCopy,
+              );
+            }
+          }
+          if (result.success) {
+            set({ project: { ...projectCopy, modifiedAt: Date.now() } });
+          }
+          return result;
+        } finally {
+          history.endGroup();
         }
-        return result;
       },
 
       copyEffects: (clipId: string) => {
@@ -4553,3 +4622,10 @@ export const useProjectStore = create<ProjectState>()(
     };
   }),
 );
+
+// Linked clips select together (docs/PROPOSAL_EDITOR_REDESIGN.md R8.6): the selection store
+// asks the project which clip a clip is linked to.
+setLinkResolver((clipId) => {
+  const partner = partnerOf(useProjectStore.getState().project, clipId);
+  return partner ? { type: "clip", id: partner.id, trackId: partner.trackId } : null;
+});

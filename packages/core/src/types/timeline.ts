@@ -159,6 +159,10 @@ export interface Clip {
    * Undefined or 0 means the primary/first audio track. */
   readonly audioTrackIndex?: number;
   readonly metadata?: ClipMetadata;
+  /** The clip this one moves, trims, splits and is deleted with: a picture and its sound
+   *  on a row of their own. Set on BOTH clips of a pair (`clip/link`) and saved with the
+   *  project; absent is an unlinked clip. */
+  readonly linkedClipId?: string;
 }
 
 export interface Effect {

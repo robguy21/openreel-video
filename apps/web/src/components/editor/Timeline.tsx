@@ -1,3 +1,4 @@
+import { collapseLinked } from "../../stores/project/linked-clips";
 import React, {
   useRef,
   useCallback,
@@ -82,7 +83,7 @@ import {
 import { CaptionBatchSelectButton } from "./timeline/CaptionBatchSelectButton";
 import { getMomentRuleMessage } from "../../utils/moment-rules";
 import { dropMomentOnTimeline, parseMomentDropPayload } from "./timeline/moment-drop";
-import { findMomentOverlap, momentLaneRole } from "@openreel/core";
+import { momentLaneRole } from "@openreel/core";
 import { LayoutGrid } from "@/icons/lucide-compat";
 
 const TRACK_LAYER_FILTERS: readonly {
@@ -471,7 +472,7 @@ export const Timeline: React.FC = () => {
   }, [playheadPosition, playbackState, pixelsPerSecond, scrollX, viewportWidth]);
 
   const handleSelectClip = useCallback(
-    (clipId: string, addToSelection: boolean) => {
+    (clipId: string, addToSelection: boolean, alone = false) => {
       const isTextClip = allTextClips.some((tc) => tc.id === clipId);
       if (isTextClip) {
         const textClip = allTextClips.find((tc) => tc.id === clipId);
@@ -498,7 +499,8 @@ export const Timeline: React.FC = () => {
           break;
         }
       }
-      select({ type: "clip", id: clipId, trackId }, addToSelection);
+      // Alt-click picks one half of a linked pair alone (R8.6).
+      select({ type: "clip", id: clipId, trackId }, addToSelection, { alone });
     },
     [tracks, select, allTextClips, allShapeClips],
   );
@@ -575,7 +577,7 @@ export const Timeline: React.FC = () => {
 
   const handleSplit = useCallback(async () => {
     const store = useProjectStore.getState();
-    for (const clipId of splittableSelectedClipIds) {
+    for (const clipId of collapseLinked(store.project, splittableSelectedClipIds)) {
       await splitTimelineItem(
         store,
         clipId,
@@ -588,7 +590,7 @@ export const Timeline: React.FC = () => {
     if (selectedClipIds.length === 0) return;
 
     const store = useProjectStore.getState();
-    for (const id of selectedClipIds) {
+    for (const id of collapseLinked(store.project, selectedClipIds)) {
       await deleteTimelineItem(store, id);
     }
     clearSelection();
@@ -598,14 +600,14 @@ export const Timeline: React.FC = () => {
     if (selectedClipIds.length === 0) return;
 
     const store = useProjectStore.getState();
-    for (const id of selectedClipIds) {
+    for (const id of collapseLinked(store.project, selectedClipIds)) {
       await duplicateTimelineItem(store, id);
     }
   }, [selectedClipIds]);
 
   const handleRippleDelete = useCallback(async () => {
     if (!canRippleDelete) return;
-    for (const id of selectedMediaClipIds) {
+    for (const id of collapseLinked(useProjectStore.getState().project, selectedMediaClipIds)) {
       await rippleDeleteClip(id);
     }
     clearSelection();
@@ -614,7 +616,7 @@ export const Timeline: React.FC = () => {
   const handleTrimToPlayhead = useCallback(
     async (trimStart: boolean) => {
       const store = useProjectStore.getState();
-      for (const id of splittableSelectedClipIds) {
+      for (const id of collapseLinked(store.project, splittableSelectedClipIds)) {
         await trimTimelineItemToPlayhead(
           store,
           id,
@@ -839,73 +841,36 @@ export const Timeline: React.FC = () => {
   );
 
   const handleTrimClip = useCallback(
-    (clipId: string, edge: "left" | "right", newTime: number) => {
-      const clip = tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
-      if (!clip) return;
-
-      const oldDuration = clip.duration;
-      const newDuration =
-        edge === "left"
-          ? Math.max(0.1, clip.startTime + clip.duration - newTime)
-          : Math.max(0.1, newTime - clip.startTime);
-
-      // Moments never overlap: refuse the trim and leave the clip as it was.
-      const owningTrack = tracks.find((t) => t.id === clip.trackId);
-      if (
-        owningTrack?.type === "moments" &&
-        findMomentOverlap(owningTrack.clips, {
-          id: clip.id,
-          startTime: edge === "left" ? newTime : clip.startTime,
-          duration: newDuration,
-        })
-      ) {
-        return;
+    async (clipId: string, edge: "left" | "right", newTime: number) => {
+      // Through the store's trim (R8.6; Robert, 2026-09-28): a Premiere trim - the frames
+      // stay where they are and the head or tail comes off - undoable, held to the source,
+      // and carried to the linked sound. The drag wraps the whole gesture in one undo step
+      // (ClipComponent). Moments keep their no-overlap rule in the executor.
+      const store = useProjectStore.getState();
+      const before = store.getClip(clipId);
+      if (!before) return;
+      const result = await store.trimClipEdge(clipId, edge, newTime);
+      const after = useProjectStore.getState().getClip(clipId);
+      if (!result.success || !after) return;
+      // Exit animations stay pinned to the clip's end.
+      if (after.duration !== before.duration && before.keyframes.some((kf) => kf.id.startsWith("kf-exit-"))) {
+        await store.updateClipKeyframes(
+          clipId,
+          before.keyframes.map((kf) =>
+            kf.id.startsWith("kf-exit-")
+              ? { ...kf, time: after.duration + (kf.time - before.duration) }
+              : kf,
+          ),
+        );
       }
-
-      const updates =
-        edge === "left"
-          ? {
-              startTime: newTime,
-              duration: newDuration,
-            }
-          : {
-              duration: newDuration,
-            };
-
-      const adjustedKeyframes = clip.keyframes.map((kf) => {
-        if (kf.id.startsWith("kf-exit-")) {
-          const relativeTime = kf.time - oldDuration;
-          return { ...kf, time: newDuration + relativeTime };
-        }
-        return kf;
-      });
-
-      useProjectStore.setState((state) => ({
-        project: {
-          ...state.project,
-          timeline: {
-            ...state.project.timeline,
-            tracks: state.project.timeline.tracks.map((track) => ({
-              ...track,
-              clips: track.clips.map((c) =>
-                c.id === clipId
-                  ? { ...c, ...updates, keyframes: adjustedKeyframes }
-                  : c,
-              ),
-            })),
-          },
-          modifiedAt: Date.now(),
-        },
-      }));
-      const newStartTime = edge === "left" ? newTime : clip.startTime;
       trimLinkedCaptions(
         useProjectStore.getState(),
-        clip,
-        newStartTime,
-        newStartTime + newDuration,
+        before,
+        after.startTime,
+        after.startTime + after.duration,
       );
     },
-    [tracks],
+    [],
   );
 
   const visualOrderTracks = useMemo(() => tracks, [tracks]);

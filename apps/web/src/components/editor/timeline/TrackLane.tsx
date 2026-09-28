@@ -36,7 +36,7 @@ interface TrackLaneProps {
   shapeClips: GraphicClipUnion[];
   trackHeights: Map<string, number>;
   timelineRef: React.RefObject<HTMLDivElement | null>;
-  onSelectClip: (clipId: string, addToSelection: boolean) => void;
+  onSelectClip: (clipId: string, addToSelection: boolean, alone?: boolean) => void;
   onDropMedia: (trackId: string, mediaId: string, startTime: number) => void;
   onMoveClip: (
     clipId: string,

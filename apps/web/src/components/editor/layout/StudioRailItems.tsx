@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect } from "react";
 import { useStudioStore, saveToStudio } from "../../../services/studio/studio-session";
 import { studioHomeUrl } from "../../../services/studio/studio-client";
 import { RailGlyph, RailLabel, RailButton, railItemClass } from "./RailItem";
@@ -16,6 +16,11 @@ import { RailGlyph, RailLabel, RailButton, railItemClass } from "./RailItem";
  *  `components/Editor.jsx`, `EDITOR_BACK`). */
 export const EDITOR_BACK = "clip-studio:editor-back";
 
+/** What the editor posts to the studio page holding it once this item is showing: the
+ *  studio gives the frame the whole window only after it, so an editor without its own
+ *  way back is never left without the studio's (studio/frontend `EDITOR_CHROME`). */
+export const EDITOR_CHROME = "clip-studio:editor-chrome";
+
 const BackGlyph = (
   <RailGlyph>
     <path d="M15 5l-7 7 7 7" />
@@ -24,10 +29,13 @@ const BackGlyph = (
 
 export const StudioBackItem: React.FC = () => {
   const pid = useStudioStore((s) => s.pid);
-  if (!pid) return null;
   // Inside the studio's Edit page the editor is a frame, and the studio gives it the
   // whole window, so this is the way back there: the studio is asked to navigate.
   const embedded = typeof window !== "undefined" && window.self !== window.top;
+  useEffect(() => {
+    if (pid && embedded) window.parent.postMessage({ type: EDITOR_CHROME }, window.location.origin);
+  }, [pid, embedded]);
+  if (!pid) return null;
   if (embedded) {
     return (
       <RailButton

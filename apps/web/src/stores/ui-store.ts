@@ -60,6 +60,38 @@ export interface SelectionItem {
   trackId?: string;
 }
 
+/**
+ * Linked clips (docs/PROPOSAL_EDITOR_REDESIGN.md R8.6): selecting a clip selects the
+ * clip it is linked to as well - a picture and its sound - unless the selection is made
+ * ALONE (Alt-click, as in Premiere). The project store tells this store who is linked to
+ * whom (`setLinkResolver`), since this store knows nothing of the project.
+ */
+type LinkResolver = (clipId: string) => SelectionItem | null;
+let linkResolver: LinkResolver = () => null;
+
+export function setLinkResolver(resolver: LinkResolver): void {
+  linkResolver = resolver;
+}
+
+/** `items` with each linked clip's partner added after it, once. */
+export function withLinkedPartners(items: readonly SelectionItem[]): SelectionItem[] {
+  const out: SelectionItem[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!seen.has(item.id)) {
+      seen.add(item.id);
+      out.push(item);
+    }
+    if (item.type !== "clip") continue;
+    const partner = linkResolver(item.id);
+    if (partner && !seen.has(partner.id)) {
+      seen.add(partner.id);
+      out.push(partner);
+    }
+  }
+  return out;
+}
+
 export interface SnapSettings {
   enabled: boolean;
   snapToGrid: boolean;
@@ -95,6 +127,9 @@ export interface KeyboardShortcuts {
 export interface UIState {
   selectedItems: SelectionItem[];
   lastSelectedItem: SelectionItem | null;
+  /** The selection was made alone (Alt-click): edits act on the clip picked and not on
+   *  the clip it is linked to. Any other selection clears it. */
+  linkAlone: boolean;
   effectApplicationClipId: string | null;
   effectApplicationLabel: string | null;
   snapSettings: SnapSettings;
@@ -132,7 +167,7 @@ export interface UIState {
   setWorkspaceTab: (tab: WorkspaceTab) => void;
   desktopPage: DesktopPage;
   setDesktopPage(page: DesktopPage): void;
-  select: (item: SelectionItem, addToSelection?: boolean) => void;
+  select: (item: SelectionItem, addToSelection?: boolean, options?: { alone?: boolean }) => void;
   selectMultiple: (items: SelectionItem[]) => void;
   deselect: (itemId: string) => void;
   clearSelection: () => void;
@@ -267,6 +302,7 @@ export const useUIStore = create<UIState>()(
       (set, get) => ({
         selectedItems: [],
         lastSelectedItem: null,
+        linkAlone: false,
         effectApplicationClipId: null,
         effectApplicationLabel: null,
 
@@ -333,32 +369,39 @@ export const useUIStore = create<UIState>()(
           });
         },
 
-        select: (item: SelectionItem, addToSelection = false) => {
+        select: (item: SelectionItem, addToSelection = false, options) => {
           const { selectedItems } = get();
+          const alone = Boolean(options?.alone);
+          // The clip and, unless picked alone, the clip it is linked to.
+          const picked = alone ? [item] : withLinkedPartners([item]);
           if (addToSelection) {
-            // Multi-select mode: only add item if not already selected to prevent duplicates
-            const isAlreadySelected = selectedItems.some(
-              (s) => s.id === item.id,
+            // Multi-select mode: only add items not already selected, to prevent duplicates
+            const added = picked.filter(
+              (p) => !selectedItems.some((s) => s.id === p.id),
             );
-            if (!isAlreadySelected) {
+            if (added.length > 0) {
               set({
-                selectedItems: [...selectedItems, item],
+                selectedItems: [...selectedItems, ...added],
                 lastSelectedItem: item, // Track most recent selection for extended selections
+                linkAlone: alone,
               });
             }
           } else {
             // Single-select mode: clear previous selection and select only this item
             set({
-              selectedItems: [item],
+              selectedItems: picked,
               lastSelectedItem: item,
+              linkAlone: alone,
             });
           }
         },
 
         selectMultiple: (items: SelectionItem[]) => {
+          const all = withLinkedPartners(items);
           set({
-            selectedItems: items,
+            selectedItems: all,
             lastSelectedItem: items.length > 0 ? items[items.length - 1] : null,
+            linkAlone: false,
           });
         },
 
@@ -382,6 +425,7 @@ export const useUIStore = create<UIState>()(
           set({
             selectedItems: [],
             lastSelectedItem: null,
+            linkAlone: false,
           });
         },
 

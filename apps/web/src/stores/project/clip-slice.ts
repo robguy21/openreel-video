@@ -3,7 +3,9 @@ import type { StoreApi } from "zustand";
 import type {
   Action,
   ActionResult,
+  Clip,
   ClipMetadata,
+  MediaItem,
   MomentKind,
   Track,
 } from "@openreel/core";
@@ -21,6 +23,15 @@ import type { ProjectState } from "../project-store";
 import { calculateTimelineDuration } from "./index";
 import { useTimelineStore } from "../timeline-store";
 import { useUIStore } from "../ui-store";
+import {
+  clampInto,
+  edgeRange,
+  edgeTrimmed,
+  findClip,
+  partnerOf,
+  partnerPoints,
+  sourceDuration,
+} from "./linked-clips";
 
 /** Default length of a freshly added moment, in seconds. */
 export const DEFAULT_MOMENT_DURATION = 5;
@@ -44,12 +55,79 @@ export type ClipSlice = Pick<
   | "slideClip"
   | "rollEdit"
   | "trimToPlayhead"
+  | "trimClipEdge"
+  | "linkClips"
+  | "unlinkClip"
   | "getClip"
   | "setClipMetadata"
   | "addMoment"
 >;
 
+/**
+ * A video's sound stream `index` as an audio media item of its own (R7.6): extracted to WAV
+ * by core's `extractAudioWav` and imported, once - a second Separate Audio of the same
+ * video reuses it. Returns the item's id, or null when the video's data is not here or
+ * the extraction fails. Replaceable for tests (`setSoundFileMaker`).
+ */
+type SoundFileMaker = (
+  video: MediaItem,
+  index: number,
+  importMedia: ProjectState["importMedia"],
+  existing: readonly MediaItem[],
+) => Promise<string | null>;
+
+const defaultSoundFileMaker: SoundFileMaker = async (video, index, importMedia, existing) => {
+  const name = `${video.name.replace(/\.[^.]+$/, "")} sound${index ? ` ${index + 1}` : ""}.wav`;
+  const had = existing.find((m) => m.type === "audio" && m.name === name);
+  if (had) return had.id;
+  if (!video.blob) return null;
+  try {
+    const { extractAudioWav } = await import("@openreel/core/media");
+    const wav = await extractAudioWav(video.blob, index);
+    const result = await importMedia(new File([wav], name, { type: "audio/wav" }));
+    return result.success && result.actionId ? result.actionId : null;
+  } catch {
+    return null;
+  }
+};
+
+let soundFileMaker: SoundFileMaker = defaultSoundFileMaker;
+
+export function setSoundFileMaker(maker: SoundFileMaker | null): void {
+  soundFileMaker = maker ?? defaultSoundFileMaker;
+}
+
 export function createClipSlice(set: Set, get: Get): ClipSlice {
+  /** One action through the executor, the project republished when it succeeds. */
+  const run = async (type: string, params: Record<string, unknown>): Promise<ActionResult> => {
+    const { project, actionExecutor } = get();
+    const action = { type, id: uuidv4(), timestamp: Date.now(), params } as unknown as Action;
+    const result = await actionExecutor.execute(action, project);
+    if (result.success) set({ project: { ...project } });
+    return result;
+  };
+
+  /** Several actions as one undo step. */
+  const grouped = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    const history = get().actionExecutor.getHistory();
+    history.beginGroup(label);
+    try {
+      return await fn();
+    } finally {
+      history.endGroup();
+    }
+  };
+
+  /**
+   * The clip an edit of `clipId` carries along (R8.6): its linked partner, unless the
+   * selection was made alone (Alt-click). Undefined when there is none to carry.
+   */
+  const soundFileFor = (video: MediaItem, index: number) =>
+    soundFileMaker(video, index, get().importMedia, get().project.mediaLibrary.items);
+
+  const follower = (clipId: string): Clip | undefined =>
+    useUIStore.getState().linkAlone ? undefined : partnerOf(get().project, clipId);
+
   return {
     addClip: async (trackId: string, mediaId: string, startTime: number) => {
       const { project, actionExecutor } = get();
@@ -223,10 +301,13 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
     },
 
     separateAudio: async (clipId: string) => {
-      const { project, actionExecutor } = get();
-      const videoClip = project.timeline.tracks
-        .flatMap((t) => t.clips)
-        .find((c) => c.id === clipId);
+      // R8.7: the sound goes to a row of its own directly under the picture's row - never
+      // the first audio track, which in a studio film is Narration - as an AUDIO file of
+      // its own (R7.6: a video on a sound row still draws its picture), carrying the
+      // clip's volume and fade, linked to the picture, and the picture is muted by an
+      // action. One undo step, the file import aside.
+      const { project } = get();
+      const videoClip = findClip(project, clipId);
       if (!videoClip) {
         return {
           success: false,
@@ -266,110 +347,84 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
         }
       }
 
-      const projectCopy = structuredClone(project);
-      const existingAudioCount = projectCopy.timeline.tracks.filter(
-        (t) => t.type === "audio",
-      ).length;
-
-      const newTrackIds: string[] = [];
-      for (let i = existingAudioCount; i < audioTrackCount; i++) {
-        const newTrackId = uuidv4();
-        newTrackIds.push(newTrackId);
-        const trackAction: Action = {
-          type: "track/add",
-          id: uuidv4(),
-          timestamp: Date.now(),
-          params: { trackType: "audio", trackId: newTrackId },
-        };
-        const trackResult = await actionExecutor.execute(
-          trackAction,
-          projectCopy,
-        );
-        if (!trackResult.success) {
+      // One audio file per sound stream, made once and kept in the library.
+      const soundIds: string[] = [];
+      for (let i = 0; i < audioTrackCount; i++) {
+        const soundId = await soundFileFor(mediaItem, i);
+        if (!soundId) {
           return {
             success: false,
             error: {
-              code: "TRACK_NOT_FOUND" as const,
-              message: "Failed to create audio track",
+              code: "MEDIA_NOT_FOUND" as const,
+              message: "The clip's sound could not be made into a file of its own",
             },
           };
         }
+        soundIds.push(soundId);
       }
 
-      const audioTimelineTracks = projectCopy.timeline.tracks.filter(
-        (t) => t.type === "audio",
-      );
-      if (audioTimelineTracks.length === 0) {
-        return {
-          success: false,
-          error: {
-            code: "TRACK_NOT_FOUND" as const,
-            message: "Could not find or create audio track",
-          },
-        };
-      }
-
-      let lastResult: ActionResult = { success: true };
-      for (let trackIdx = 0; trackIdx < audioTrackCount; trackIdx++) {
-        const targetTrack = audioTimelineTracks[trackIdx];
-        if (!targetTrack) break;
-        const action: Action = {
-          type: "clip/add",
-          id: uuidv4(),
-          timestamp: Date.now(),
-          params: {
-            trackId: targetTrack.id,
-            mediaId: videoClip.mediaId,
+      const tracks = get().project.timeline.tracks;
+      const pictureTrack = tracks.find((t) => t.id === videoClip.trackId);
+      const below = tracks.findIndex((t) => t.id === videoClip.trackId) + 1;
+      return grouped("Separate audio", async () => {
+        let lastResult: ActionResult = { success: true };
+        const soundClipIds: string[] = [];
+        for (let i = 0; i < soundIds.length; i++) {
+          const trackId = uuidv4();
+          const name =
+            (pictureTrack?.name ? `${pictureTrack.name} sound` : "Sound") +
+            (soundIds.length > 1 ? ` ${i + 1}` : "");
+          lastResult = await run("track/add", {
+            trackType: "audio",
+            trackId,
+            position: below + i,
+            name,
+          });
+          if (!lastResult.success) return lastResult;
+          const soundClipId = uuidv4();
+          lastResult = await run("clip/add", {
+            clipId: soundClipId,
+            trackId,
+            mediaId: soundIds[i],
             startTime: videoClip.startTime,
             duration: videoClip.duration,
             inPoint: videoClip.inPoint,
             outPoint: videoClip.outPoint,
             speed: videoClip.speed,
             reversed: videoClip.reversed,
-            audioTrackIndex: trackIdx,
-          },
-        };
-        lastResult = await actionExecutor.execute(action, projectCopy);
-        if (!lastResult.success) break;
-      }
-
-      if (lastResult.success) {
-        for (const track of projectCopy.timeline.tracks) {
-          const clipIndex = track.clips.findIndex((c) => c.id === clipId);
-          if (clipIndex !== -1) {
-            (track.clips[clipIndex] as unknown as { volume: number }).volume = 0;
-            break;
-          }
+            volume: videoClip.volume,
+            ...(videoClip.fade ? { fade: { ...videoClip.fade } } : {}),
+          });
+          if (!lastResult.success) return lastResult;
+          soundClipIds.push(soundClipId);
         }
-        set({ project: { ...projectCopy, modifiedAt: Date.now() } });
-      }
-      return lastResult;
+        await run("clip/link", { clipId, linkedClipId: soundClipIds[0] });
+        await run("audio/setVolume", { clipId, volume: 0 });
+        return lastResult;
+      });
     },
 
     removeClip: async (clipId: string) => {
-      const { project, actionExecutor } = get();
-      const action: Action = {
-        type: "clip/remove",
-        id: uuidv4(),
-        timestamp: Date.now(),
-        params: { clipId },
-      };
-      const result = await actionExecutor.execute(action, project);
-      if (result.success) set({ project: { ...project } });
-      return result;
+      const partner = follower(clipId);
+      if (!partner) return run("clip/remove", { clipId });
+      return grouped("Delete clips", async () => {
+        const result = await run("clip/remove", { clipId });
+        if (result.success) await run("clip/remove", { clipId: partner.id });
+        return result;
+      });
     },
 
     moveClip: async (clipId: string, startTime: number, trackId?: string) => {
-      const { project, actionExecutor } = get();
-      const action: Action = {
-        type: "clip/move",
-        id: uuidv4(),
-        timestamp: Date.now(),
-        params: { clipId, startTime, trackId },
-      };
-      const result = await actionExecutor.execute(action, project);
-      if (result.success) set({ project: { ...project } });
-      return result;
+      const clip = findClip(get().project, clipId);
+      const partner = follower(clipId);
+      if (!clip || !partner) return run("clip/move", { clipId, startTime, trackId });
+      // The partner moves by the same amount and stays on its own row.
+      const partnerStart = Math.max(0, partner.startTime + (startTime - clip.startTime));
+      return grouped("Move clips", async () => {
+        const result = await run("clip/move", { clipId, startTime, trackId });
+        if (result.success) await run("clip/move", { clipId: partner.id, startTime: partnerStart });
+        return result;
+      });
     },
 
     closeGapBeforeClip: async (clipId: string) => {
@@ -394,83 +449,123 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
           moves[0].trackId,
         );
       }
-      const { actionExecutor } = get();
-      const history = actionExecutor.getHistory();
-      history.beginGroup("Move clips");
-      try {
+      return grouped("Move clips", async () => {
+        const listed = new Set(moves.map((m) => m.clipId));
         let lastResult: ActionResult = { success: true };
         for (const move of moves) {
-          const { project } = get();
-          const action: Action = {
-            type: "clip/move",
-            id: uuidv4(),
-            timestamp: Date.now(),
-            params: {
-              clipId: move.clipId,
-              startTime: move.startTime,
-              trackId: move.trackId,
-            },
-          };
-          lastResult = await actionExecutor.execute(action, project);
+          const clip = findClip(get().project, move.clipId);
+          const partner = follower(move.clipId);
+          lastResult = await run("clip/move", {
+            clipId: move.clipId,
+            startTime: move.startTime,
+            trackId: move.trackId,
+          });
           if (!lastResult.success) break;
-          set({ project: { ...project } });
+          if (clip && partner && !listed.has(partner.id)) {
+            await run("clip/move", {
+              clipId: partner.id,
+              startTime: Math.max(0, partner.startTime + (move.startTime - clip.startTime)),
+            });
+          }
         }
         return lastResult;
-      } finally {
-        history.endGroup();
-      }
+      });
     },
 
     trimClip: async (clipId: string, inPoint?: number, outPoint?: number) => {
-      const { project, actionExecutor } = get();
-      const action: Action = {
-        type: "clip/trim",
-        id: uuidv4(),
-        timestamp: Date.now(),
-        params: { clipId, inPoint, outPoint },
+      const clip = findClip(get().project, clipId);
+      const partner = follower(clipId);
+      if (!clip || !partner) return run("clip/trim", { clipId, inPoint, outPoint });
+      const points = partnerPoints(
+        clip,
+        partner,
+        inPoint,
+        outPoint,
+        sourceDuration(get().project, partner),
+      );
+      return grouped("Trim clips", async () => {
+        const result = await run("clip/trim", { clipId, inPoint, outPoint });
+        if (result.success) await run("clip/trim", { clipId: partner.id, ...points });
+        return result;
+      });
+    },
+
+    trimClipEdge: async (clipId: string, edge: "left" | "right", time: number) => {
+      // A trim as Premiere makes it (Robert, 2026-09-28): the left edge takes the head off
+      // (start and in move together, the frames stay put), the right edge the tail, and
+      // neither goes past its source - for the clip and its partner alike, by one amount.
+      const { project } = get();
+      const clip = findClip(project, clipId);
+      if (!clip) {
+        return {
+          success: false,
+          error: { code: "INVALID_PARAMS" as const, message: "Clip not found" },
+        };
+      }
+      const partner = follower(clipId);
+      const want =
+        edge === "left" ? time - clip.startTime : time - (clip.startTime + clip.duration);
+      const ranges: Array<[number, number]> = [
+        edgeRange(clip, edge, sourceDuration(project, clip)),
+      ];
+      if (partner) ranges.push(edgeRange(partner, edge, sourceDuration(project, partner)));
+      const d = clampInto(want, ranges);
+      if (Math.abs(d) < 1e-9) return { success: true };
+      const apply = async (c: Clip) => {
+        const next = edgeTrimmed(c, edge, d);
+        if (edge === "left") {
+          const r = await run("clip/trim", { clipId: c.id, inPoint: next.inPoint });
+          if (r.success) await run("clip/move", { clipId: c.id, startTime: next.startTime });
+          return r;
+        }
+        return run("clip/trim", { clipId: c.id, outPoint: next.outPoint });
       };
-      const result = await actionExecutor.execute(action, project);
-      if (result.success) set({ project: { ...project } });
-      return result;
+      return grouped("Trim clip", async () => {
+        const result = await apply(clip);
+        if (result.success && partner) await apply(partner);
+        return result;
+      });
     },
 
     splitClip: async (clipId: string, time: number) => {
-      const { project, actionExecutor } = get();
-      const action: Action = {
-        type: "clip/split",
-        id: uuidv4(),
-        timestamp: Date.now(),
-        params: { clipId, time },
-      };
-      const result = await actionExecutor.execute(action, project);
-      if (result.success) set({ project: { ...project } });
-      return result;
+      const partner = follower(clipId);
+      const rightId = uuidv4();
+      const splitsPartner =
+        partner && time > partner.startTime && time < partner.startTime + partner.duration;
+      if (!partner || !splitsPartner) {
+        return run("clip/split", { clipId, time, newClipId: rightId });
+      }
+      // Both halves split at one time, and the two right-hand halves are a pair of their own.
+      return grouped("Split clips", async () => {
+        const result = await run("clip/split", { clipId, time, newClipId: rightId });
+        if (!result.success) return result;
+        const partnerRight = uuidv4();
+        const other = await run("clip/split", { clipId: partner.id, time, newClipId: partnerRight });
+        if (other.success) {
+          await run("clip/link", { clipId: rightId, linkedClipId: partnerRight });
+        }
+        return result;
+      });
     },
 
     rippleDeleteClip: async (clipId: string) => {
-      const { project, actionExecutor } = get();
-      const action: Action = {
-        type: "clip/rippleDelete",
-        id: uuidv4(),
-        timestamp: Date.now(),
-        params: { clipId },
-      };
-      const result = await actionExecutor.execute(action, project);
-      if (result.success) set({ project: { ...project } });
-      return result;
+      const partner = follower(clipId);
+      if (!partner) return run("clip/rippleDelete", { clipId });
+      return grouped("Ripple delete", async () => {
+        const result = await run("clip/rippleDelete", { clipId });
+        if (result.success) await run("clip/rippleDelete", { clipId: partner.id });
+        return result;
+      });
     },
 
     slipClip: async (clipId: string, delta: number) => {
-      const { project, actionExecutor } = get();
-      const action: Action = {
-        type: "clip/slip",
-        id: uuidv4(),
-        timestamp: Date.now(),
-        params: { clipId, delta },
-      };
-      const result = await actionExecutor.execute(action, project);
-      if (result.success) set({ project: { ...project } });
-      return result;
+      const partner = follower(clipId);
+      if (!partner) return run("clip/slip", { clipId, delta });
+      return grouped("Slip clips", async () => {
+        const result = await run("clip/slip", { clipId, delta });
+        if (result.success) await run("clip/slip", { clipId: partner.id, delta });
+        return result;
+      });
     },
 
     slideClip: async (clipId: string, delta: number) => {
@@ -535,17 +630,27 @@ export function createClipSlice(set: Set, get: Get): ClipSlice {
       playheadTime: number,
       trimStart: boolean,
     ) => {
-      const { project, actionExecutor } = get();
-      const action: Action = {
-        type: "clip/trimToPlayhead",
-        id: uuidv4(),
-        timestamp: Date.now(),
-        params: { clipId, playheadTime, trimStart },
-      };
-      const result = await actionExecutor.execute(action, project);
-      if (result.success) set({ project: { ...project } });
-      return result;
+      const partner = follower(clipId);
+      const spans =
+        partner &&
+        playheadTime > partner.startTime &&
+        playheadTime < partner.startTime + partner.duration;
+      if (!partner || !spans) {
+        return run("clip/trimToPlayhead", { clipId, playheadTime, trimStart });
+      }
+      return grouped("Trim clips", async () => {
+        const result = await run("clip/trimToPlayhead", { clipId, playheadTime, trimStart });
+        if (result.success) {
+          await run("clip/trimToPlayhead", { clipId: partner.id, playheadTime, trimStart });
+        }
+        return result;
+      });
     },
+
+    linkClips: async (clipId: string, otherId: string) =>
+      run("clip/link", { clipId, linkedClipId: otherId }),
+
+    unlinkClip: async (clipId: string) => run("clip/link", { clipId, linkedClipId: null }),
 
     getClip: (clipId: string) => {
       const { project } = get();

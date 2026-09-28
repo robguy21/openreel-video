@@ -12,12 +12,15 @@ import {
   Image,
   ArrowLeftToLine,
   ListChecks,
+  Link,
+  Unlink,
 } from "@/icons/lucide-compat";
 import type { Clip, Track } from "@openreel/core";
 import { useProjectStore } from "../../../stores/project-store";
 import { useTimelineStore } from "../../../stores/timeline-store";
 import { useUIStore } from "../../../stores/ui-store";
 import { getTimelineTrackSelection } from "../../../utils/timeline-item-actions";
+import { partnerOf } from "../../../stores/project/linked-clips";
 
 interface ClipContextMenuProps {
   clip: Clip;
@@ -42,9 +45,12 @@ export function useClipContextMenuItems({
     pasteEffects,
     copiedEffects,
     closeGapBeforeClip,
+    linkClips,
+    unlinkClip,
   } = useProjectStore();
   const { playheadPosition } = useTimelineStore();
   const selectMultiple = useUIStore((state) => state.selectMultiple);
+  const selectedItems = useUIStore((state) => state.selectedItems);
 
   const isPlayheadOnClip =
     playheadPosition >= clip.startTime &&
@@ -70,11 +76,38 @@ export function useClipContextMenuItems({
     mediaItem?.metadata?.channels &&
     mediaItem.metadata.channels > 0;
 
+  // Linked clips (R8.6): this clip's partner, and - for Link - the one other clip selected,
+  // when the two are one picture and one sound.
+  const partner = partnerOf(useProjectStore.getState().project, clip.id);
+  const linkCandidate = React.useMemo(() => {
+    if (partner) return null;
+    const others = selectedItems.filter((s) => s.type === "clip" && s.id !== clip.id);
+    if (others.length !== 1 || !selectedItems.some((s) => s.id === clip.id)) return null;
+    const store = useProjectStore.getState();
+    const other = store.getClip(others[0].id);
+    if (!other) return null;
+    const kindOf = (c: Clip) => store.getMediaItem(c.mediaId)?.type;
+    const kinds = [kindOf(clip), kindOf(other)];
+    const onePicture = kinds.filter((k) => k === "video" || k === "image").length === 1;
+    const oneSound = kinds.filter((k) => k === "audio").length === 1;
+    return onePicture && oneSound ? other : null;
+  }, [partner, selectedItems, clip]);
+
   const hasEffects = clip.effects && clip.effects.length > 0;
   const hasCopiedEffects = copiedEffects && copiedEffects.length > 0;
 
   const handleCopy = () => {
-    copyClips([clip.id]);
+    copyClips(partner ? [clip.id, partner.id] : [clip.id]);
+    onClose?.();
+  };
+
+  const handleUnlink = async () => {
+    await unlinkClip(clip.id);
+    onClose?.();
+  };
+
+  const handleLink = async () => {
+    if (linkCandidate) await linkClips(clip.id, linkCandidate.id);
     onClose?.();
   };
 
@@ -204,7 +237,22 @@ export function useClipContextMenuItems({
     });
   }
 
-  if (isVideoWithAudio) {
+  if (partner) {
+    items.push({
+      label: "Unlink",
+      icon: <Unlink size={14} aria-hidden />,
+      onClick: handleUnlink,
+    });
+  } else if (linkCandidate) {
+    items.push({
+      label: "Link",
+      icon: <Link size={14} aria-hidden />,
+      onClick: handleLink,
+    });
+  }
+
+  // A picture that already has its sound on a row of its own has nothing to separate.
+  if (isVideoWithAudio && !partner) {
     items.push({
       label: "Separate Audio",
       icon: <Music size={14} aria-hidden />,

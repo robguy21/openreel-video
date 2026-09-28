@@ -54,6 +54,7 @@ import { AiTab } from "./inspector/tabs/AiTab";
 import { TransitionInspector } from "./inspector/TransitionInspector";
 import { MultiClipInspector } from "./inspector/MultiClipInspector";
 import { MomentInspector } from "./inspector/MomentInspector";
+import { collapseLinked } from "../../stores/project/linked-clips";
 
 // Initialize engines as singletons
 const chromaKeyEngine = new ChromaKeyEngine({ width: 1920, height: 1080 });
@@ -142,7 +143,8 @@ export const InspectorPanel: React.FC = () => {
   const finishEffectApplication = useUIStore(
     (state) => state.finishEffectApplication,
   );
-  const selectedClipIds = getSelectedClipIds();
+  // A linked picture and its sound are one clip to the reader: the one clicked is shown.
+  const selectedClipIds = collapseLinked(project, getSelectedClipIds());
   const pausePlayback = useTimelineStore((state) => state.pause);
   const lockPlayback = useTimelineStore((state) => state.lockPlayback);
   const unlockPlayback = useTimelineStore((state) => state.unlockPlayback);

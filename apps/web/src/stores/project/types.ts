@@ -202,6 +202,9 @@ export interface ProjectState {
     playheadTime: number,
     trimStart: boolean,
   ) => Promise<ActionResult>;
+  trimClipEdge: (clipId: string, edge: "left" | "right", time: number) => Promise<ActionResult>;
+  linkClips: (clipId: string, otherId: string) => Promise<ActionResult>;
+  unlinkClip: (clipId: string) => Promise<ActionResult>;
   getClip: (clipId: string) => Clip | undefined;
   /** Shallow-merge metadata into a clip (undoable). */
   setClipMetadata: (

@@ -7,6 +7,7 @@ import {
   Sparkles,
   FileCode,
   Keyboard,
+  RotateCcw,
 } from "@/icons/lucide-compat";
 import { useUIStore } from "../../../stores/ui-store";
 import { useSettingsStore } from "../../../stores/settings-store";
@@ -18,6 +19,8 @@ import {
   MOGRAPH_TOUR_KEY,
 } from "../tour";
 import { RailButton, RailMenu } from "./RailItem";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { rebuildFromFilm, useStudioStore } from "../../../services/studio/studio-session";
 
 /**
  * The "..." menu at the foot of the rail: everything rare (docs/PROPOSAL_EDITOR_REDESIGN.md
@@ -30,16 +33,42 @@ export const EditorMoreMenu: React.FC<{ onShowShortcuts: () => void }> = ({
   onShowShortcuts,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [confirmRebuild, setConfirmRebuild] = useState(false);
+  const inStudio = useStudioStore((s) => s.pid !== null);
   const openModal = useUIStore((s) => s.openModal);
   const { openSettings } = useSettingsStore();
   const { navigate } = useRouter();
 
   return (
+    <>
+    <ConfirmDialog
+      open={confirmRebuild}
+      title="Rebuild from the film?"
+      body="This lays the film out fresh from the studio. Changes you made in this edit are lost."
+      confirmLabel="Rebuild"
+      cancelLabel="Keep my edit"
+      onCancel={() => setConfirmRebuild(false)}
+      onConfirm={() => {
+        setConfirmRebuild(false);
+        void rebuildFromFilm();
+      }}
+    />
     <RailMenu
       label="More"
       isOpen={isOpen}
       onOpenChange={setIsOpen}
       entries={[
+        ...(inStudio
+          ? [
+              {
+                label: "Rebuild from the film…",
+                description: "Lay the part out fresh from the studio",
+                icon: <RotateCcw size={16} aria-hidden />,
+                onSelect: () => setConfirmRebuild(true),
+              },
+              null,
+            ]
+          : []),
         {
           label: "Project JSON / Comments",
           icon: <FileCode size={16} aria-hidden />,
@@ -100,5 +129,6 @@ export const EditorMoreMenu: React.FC<{ onShowShortcuts: () => void }> = ({
         />
       }
     />
+    </>
   );
 };

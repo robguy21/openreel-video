@@ -1,3 +1,4 @@
+import { collapseLinked } from "../stores/project/linked-clips";
 import { useEffect, useCallback, useState } from "react";
 import {
   keyboardShortcuts,
@@ -141,7 +142,7 @@ export function useKeyboardShortcuts() {
       copyClips(selectedIds);
       const store = useProjectStore.getState();
       void Promise.all(
-        selectedIds.map((id) => deleteTimelineItem(store, id)),
+        collapseLinked(store.project, selectedIds).map((id) => deleteTimelineItem(store, id)),
       ).then(() => clearSelection());
     }
   }, [getSelectedClipIds, copyClips, clearSelection]);
@@ -163,7 +164,10 @@ export function useKeyboardShortcuts() {
   const handleDuplicate = useCallback(() => {
     const selectedIds = getSelectedClipIds();
     const store = useProjectStore.getState();
-    selectedIds.forEach((id) => void duplicateTimelineItem(store, id));
+    // One edit per linked pair: the store carries the other half (R8.6).
+    collapseLinked(store.project, selectedIds).forEach(
+      (id) => void duplicateTimelineItem(store, id),
+    );
   }, [getSelectedClipIds]);
 
   const handleDelete = useCallback(() => {
@@ -178,14 +182,16 @@ export function useKeyboardShortcuts() {
     }
     const selectedIds = getSelectedClipIds();
     const store = useProjectStore.getState();
-    selectedIds.forEach((id) => void deleteTimelineItem(store, id));
+    collapseLinked(store.project, selectedIds).forEach(
+      (id) => void deleteTimelineItem(store, id),
+    );
     clearSelection();
   }, [getSelectedClipIds, clearSelection]);
 
   const handleRippleDelete = useCallback(() => {
     const selectedIds = getSelectedClipIds();
     const store = useProjectStore.getState();
-    selectedIds
+    collapseLinked(store.project, selectedIds)
       .filter((id) => getTimelineItemKind(store, id) === "media")
       .forEach((id) => rippleDeleteClip(id));
     clearSelection();
@@ -200,7 +206,9 @@ export function useKeyboardShortcuts() {
     );
     const store = useProjectStore.getState();
     void Promise.all(
-      splittableIds.map((id) => splitTimelineItem(store, id, playheadPosition)),
+      collapseLinked(store.project, splittableIds).map((id) =>
+        splitTimelineItem(store, id, playheadPosition),
+      ),
     );
   }, [getSelectedClipIds, playheadPosition, project]);
 
@@ -213,7 +221,7 @@ export function useKeyboardShortcuts() {
     );
     const store = useProjectStore.getState();
     void Promise.all(
-      trimmableIds.map((id) =>
+      collapseLinked(store.project, trimmableIds).map((id) =>
         trimTimelineItemToPlayhead(store, id, playheadPosition, true),
       ),
     );
@@ -228,7 +236,7 @@ export function useKeyboardShortcuts() {
     );
     const store = useProjectStore.getState();
     void Promise.all(
-      trimmableIds.map((id) =>
+      collapseLinked(store.project, trimmableIds).map((id) =>
         trimTimelineItemToPlayhead(store, id, playheadPosition, false),
       ),
     );

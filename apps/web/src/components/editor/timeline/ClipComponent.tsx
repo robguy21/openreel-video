@@ -35,7 +35,8 @@ interface ClipComponentProps {
   isSelected: boolean;
   trackHeights: Map<string, number>;
   timelineRef: React.RefObject<HTMLDivElement | null>;
-  onSelect: (clipId: string, addToSelection: boolean) => void;
+  /** `alone` (Alt-click) picks this clip without the clip it is linked to. */
+  onSelect: (clipId: string, addToSelection: boolean, alone?: boolean) => void;
   onMoveClip: (
     clipId: string,
     newStartTime: number,
@@ -161,7 +162,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     if (e.button !== 0) return;
     if (isDragging || isPendingDrag) return;
     e.stopPropagation();
-    onSelect(clip.id, e.shiftKey || e.metaKey);
+    onSelect(clip.id, e.shiftKey || e.metaKey, e.altKey);
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -409,6 +410,8 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
       e.stopPropagation();
       setIsTrimming(true);
       setTrimEdge(edge);
+      // The whole drag is one undo step (R8.6).
+      useProjectStore.getState().beginHistoryGroup("Trim clip");
       trimStartRef.current = {
         mouseX: e.clientX,
         startTime: clip.startTime,
@@ -435,7 +438,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     const handlePendingMouseUp = (e: MouseEvent) => {
       dragPendingRef.current.active = false;
       setIsPendingDrag(false);
-      onSelect(clip.id, e.shiftKey || e.metaKey);
+      onSelect(clip.id, e.shiftKey || e.metaKey, e.altKey);
     };
 
     window.addEventListener("mousemove", handlePendingMouseMove);
@@ -708,6 +711,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     const handleMouseUp = () => {
       setIsTrimming(false);
       setTrimEdge(null);
+      useProjectStore.getState().endHistoryGroup();
       document.body.style.cursor = "";
       if (momentRejectedRef.current) {
         momentRejectedRef.current = false;

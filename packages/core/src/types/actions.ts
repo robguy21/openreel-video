@@ -183,7 +183,24 @@ export type ClipAction =
       type: "clip/trim";
       params: { clipId: string; inPoint?: number; outPoint?: number };
     }
-  | { type: "clip/split"; params: { clipId: string; time: number } }
+  | {
+      type: "clip/split";
+      /** `newClipId` names the right-hand half, so a redo makes the same clip again. */
+      params: { clipId: string; time: number; newClipId?: string };
+    }
+  | {
+      /**
+       * Link two clips as a pair (each names the other), or unlink one (`linkedClipId`
+       * null: it and its partner name nobody). A clip already in another pair leaves it.
+       * `restore` is undo's: exactly these values, nothing else.
+       */
+      type: "clip/link";
+      params: {
+        clipId: string;
+        linkedClipId: string | null;
+        restore?: Array<{ clipId: string; linkedClipId: string | null }>;
+      };
+    }
   | { type: "clip/rippleDelete"; params: { clipId: string } }
   | {
       type: "clip/setBlendMode";

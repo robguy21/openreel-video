@@ -850,6 +850,9 @@ export class ActionExecutor {
                 id: params.clipId ?? crypto.randomUUID(),
                 trackId: params.trackId,
                 startTime: params.startTime,
+                // A copy is nobody's partner: the pair it came from is linked already,
+                // and a copied pair is linked to each other by whoever copied it.
+                linkedClipId: undefined,
               }
             : {
                 id: params.clipId ?? crypto.randomUUID(),
@@ -962,7 +965,7 @@ export class ActionExecutor {
       }
 
       case "clip/split": {
-        const params = action.params as { clipId: string; time: number };
+        const params = action.params as { clipId: string; time: number; newClipId?: string };
         const clip = this.findClip(timeline, params.clipId);
         if (clip) {
           const splitTime = params.time;
@@ -974,12 +977,15 @@ export class ActionExecutor {
             outPoint: clip.inPoint + splitOffset,
           };
 
+          // The right-hand half starts unlinked: the left half keeps the pair, and a linked
+          // split links the two right-hand halves to each other itself (`clip/link`).
           const clip2 = {
             ...clip,
-            id: crypto.randomUUID(),
+            id: params.newClipId ?? crypto.randomUUID(),
             startTime: splitTime,
             duration: clip.duration - splitOffset,
             inPoint: clip.inPoint + splitOffset,
+            linkedClipId: undefined,
           };
 
           timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
@@ -1041,6 +1047,38 @@ export class ActionExecutor {
             return track;
           });
         }
+        break;
+      }
+
+      case "clip/link": {
+        const params = action.params as {
+          clipId: string;
+          linkedClipId: string | null;
+          restore?: Array<{ clipId: string; linkedClipId: string | null }>;
+        };
+        const next = new Map<string, string | null>();
+        if (params.restore) {
+          for (const r of params.restore) next.set(r.clipId, r.linkedClipId);
+        } else {
+          const a = this.findClip(timeline, params.clipId);
+          const b = params.linkedClipId ? this.findClip(timeline, params.linkedClipId) : null;
+          // Whoever either clip was paired with before is left on its own.
+          if (a?.linkedClipId) next.set(a.linkedClipId, null);
+          if (b?.linkedClipId) next.set(b.linkedClipId, null);
+          next.set(params.clipId, params.linkedClipId);
+          if (params.linkedClipId) next.set(params.linkedClipId, params.clipId);
+        }
+        timeline.tracks = timeline.tracks.map((track: MutableTrack) => ({
+          ...track,
+          clips: track.clips.map((clip: MutableClip) => {
+            if (!next.has(clip.id)) return clip;
+            const to = next.get(clip.id);
+            if (to) return { ...clip, linkedClipId: to };
+            const { linkedClipId: _gone, ...rest } = clip as MutableClip & { linkedClipId?: string };
+            void _gone;
+            return rest as MutableClip;
+          }),
+        }));
         break;
       }
 

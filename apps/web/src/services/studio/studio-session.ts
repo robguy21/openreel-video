@@ -24,6 +24,7 @@ import { toast } from "../../stores/notification-store";
 import { loadMediaBlob, saveMediaBlob } from "../media-storage";
 import { createMissingMediaItem, restoreMediaItem } from "../../utils/media-recovery";
 import {
+  archiveSavedEdit,
   fetchManifest,
   fetchMediaBlob,
   fetchSavedDoc,
@@ -38,7 +39,7 @@ import {
   type StudioSavedDoc,
   type StudioShot,
 } from "./studio-client";
-import { planTimeline } from "./studio-layout";
+import { planTimeline, type TimelinePlan } from "./studio-layout";
 
 export type StudioStatus = "idle" | "opening" | "ready" | "saving" | "exporting" | "error";
 
@@ -199,6 +200,33 @@ async function doOpen(at: StudioRef): Promise<void> {
   }
 }
 
+/**
+ * "Rebuild from the film" (R8.8), after the reader has confirmed it: the part's saved edit
+ * is put aside in the studio (kept there as a file) and the part is laid out fresh from
+ * the manifest by the first-build path - takes at the film's cut points, each take's
+ * sound on its own row. A saved edit is otherwise opened exactly as saved and never
+ * upgraded on its own.
+ */
+export async function rebuildFromFilm(): Promise<void> {
+  const at = ref();
+  if (!at || get().status !== "ready") return;
+  stopAutosave();
+  set({ status: "opening", message: "Rebuilding from the film…", progress: 0.05, error: null });
+  try {
+    await saveChain;
+    await archiveSavedEdit(at);
+    const manifest = await fetchManifest(at);
+    set({ name: manifest.project.name, partLabel: partLabelOf(manifest), stitchFilm: stitchFilmOf(manifest) });
+    await buildFromManifest(manifest);
+    set({ status: "ready", message: "", progress: 1, dirty: false });
+    startAutosave();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    set({ status: "error", error: msg, message: "" });
+    toast.error("Rebuild from the film failed", msg);
+  }
+}
+
 /** The manifest's `stitch_export` as the Reference monitor's film, or null. */
 export function stitchFilmOf(manifest: StudioManifest): StudioSessionState["stitchFilm"] {
   const ex = manifest.stitch_export;
@@ -327,9 +355,6 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
     narrationDelayMs: manifest.narration_delay_ms,
     narrationDuck: manifest.narration_duck,
   };
-  const soundFrom = new Set(
-    planTimeline(all, fps, (s) => s.video?.duration_s || 0, timing).leadIns.map((x) => x.from),
-  );
 
   // Download everything first so the project canvas can match the first take.
   progress("Downloading takes…", 0.3);
@@ -342,8 +367,10 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
     if (s.narration?.url && s.include_vo) {
       narration = await fetchAsFile(s.narration.url, shotFileName(s, " VO", "mp3"), "audio/mpeg");
     }
+    // Every take's own sound, for its row beside the picture (R8.1) - once, and the same
+    // item serves the seam sound under the next shot.
     let sound: File | null = null;
-    if (soundFrom.has(i) && s.audio?.url) {
+    if (s.audio?.url) {
       const ext = extOf(s.audio.asset, "flac");
       sound = await fetchAsFile(s.audio.url, shotFileName(s, " sound", ext), AUDIO_TYPES[ext] || "audio/flac");
     }
@@ -416,41 +443,55 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
     { ...timing, narrated: (_s, i) => Boolean(imported.get(i)?.narrationId) },
   );
   const leadIns = plan.leadIns.filter((x) => imported.get(x.from)?.soundId);
-  const laneTracks = [`track-${uuidv4()}`];
-  const audioTrackId = `track-${uuidv4()}`;
-  const seamTrackId = `track-${uuidv4()}`;
-  await useProjectStore.getState().addTrack("video", undefined, { trackId: laneTracks[0], name: "Shots" });
-  // Each lane above the first is a track above the one before it (the first track in the
-  // list is drawn on top), so a clip that fades in over another is always the upper one.
-  for (let lane = 1; lane < plan.lanes; lane++) {
-    laneTracks.push(`track-${uuidv4()}`);
-    await useProjectStore.getState().addTrack("video", 0, {
-      trackId: laneTracks[lane],
-      name: plan.lanes > 2 ? `Crossfades ${lane}` : "Crossfades",
-    });
+  const tracks = studioTrackPlan(plan, (shot) => Boolean(imported.get(shot)?.soundId), leadIns.length > 0);
+  const trackIds = new Map<string, string>();
+  for (const t of tracks) {
+    const trackId = `track-${uuidv4()}`;
+    trackIds.set(t.key, trackId);
+    await useProjectStore.getState().addTrack(t.type, t.position, { trackId, name: t.name });
   }
-  if (plan.narrations.length) {
-    await useProjectStore.getState().addTrack("audio", undefined, { trackId: audioTrackId, name: "Narration" });
-  }
-  if (leadIns.length) {
-    await useProjectStore.getState().addTrack("audio", undefined, { trackId: seamTrackId, name: "Seam sound" });
-  }
+  const laneTrack = (lane: number) => trackIds.get(`picture:${lane}`)!;
+  const soundTrack = (lane: number) => trackIds.get(`sound:${lane}`);
 
+  // Each planned clip is a linked pair (R8.3): the picture on its lane, silent and with no
+  // sound fade, and the take's own sound on the matching sound row at the plan's times,
+  // level and fades. A shot with no separate sound keeps its sound in the picture clip,
+  // exactly as before (R8.4), and says so once.
   for (const c of plan.clips) {
     const ids = imported.get(c.shot)!;
+    const soundRow = ids.soundId ? soundTrack(c.lane) : undefined;
+    const fade =
+      c.soundFadeIn || c.soundFadeOut ? { fadeIn: c.soundFadeIn, fadeOut: c.soundFadeOut } : undefined;
     const clip = await placeClip({
-      trackId: laneTracks[c.lane],
+      trackId: laneTrack(c.lane),
       mediaId: ids.videoId,
       startTime: c.startTime,
       inPoint: c.inPoint,
       outPoint: c.outPoint,
-      volume: c.volume,
-      fade: c.soundFadeIn || c.soundFadeOut ? { fadeIn: c.soundFadeIn, fadeOut: c.soundFadeOut } : undefined,
+      volume: soundRow ? 0 : c.volume,
+      fade: soundRow ? undefined : fade,
     });
     if (!clip) throw new Error(`Could not place ${all[c.shot].summary}`);
     if (c.pictureIn > 0) await addEdgeFade(clip, "in", c.pictureIn);
     if (c.pictureOut > 0) await addEdgeFade(clip, "out", c.pictureOut);
+    if (!soundRow) {
+      console.warn(`[studio] ${all[c.shot].summary}: no separate sound, kept in the picture clip`);
+      continue;
+    }
+    const sound = await placeClip({
+      trackId: soundRow,
+      mediaId: ids.soundId!,
+      startTime: c.startTime,
+      inPoint: c.inPoint,
+      outPoint: c.outPoint,
+      volume: c.volume,
+      fade,
+    });
+    if (!sound) throw new Error(`Could not place the sound of ${all[c.shot].summary}`);
+    await useProjectStore.getState().linkClips(clip, sound);
   }
+  const audioTrackId = trackIds.get("narration")!;
+  const seamTrackId = trackIds.get("seam")!;
   for (const n of plan.narrations) {
     const id = imported.get(n.shot)?.narrationId;
     if (id) await useProjectStore.getState().addClip(audioTrackId, id, n.startTime);
@@ -469,6 +510,53 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
 
   // First save so the studio knows an edit exists even if the user closes the tab now.
   await saveToStudio();
+}
+
+export interface StudioTrack {
+  /** "picture:<lane>", "sound:<lane>", "narration" or "seam". */
+  key: string;
+  type: "video" | "audio";
+  name: string;
+  /** Where `addTrack` puts it: undefined appends, 0 is the top. */
+  position?: number;
+}
+
+/**
+ * The rows of a laid-out studio film, in the order they are added (R8.2). Top to bottom
+ * they read: `Crossfades` (`Crossfades N` when there are several), `Shots`, `Shot sound`,
+ * `Crossfade sound` (one per crossfade lane, `Crossfade sound N` when there are several),
+ * `Narration`, `Seam sound`. A crossfaded shot's picture is on a Crossfades lane, so its
+ * sound is on the matching Crossfade sound row: two sounds that overlap never share a row.
+ * A row nothing is laid on is not made.
+ */
+export function studioTrackPlan(
+  plan: Pick<TimelinePlan, "clips" | "lanes" | "narrations">,
+  hasSound: (shot: number) => boolean,
+  hasLeadIns: boolean,
+): StudioTrack[] {
+  const out: StudioTrack[] = [{ key: "picture:0", type: "video", name: "Shots" }];
+  // Each lane above the first is a track above the one before it (the first track in the
+  // list is drawn on top), so a clip that fades in over another is always the upper one.
+  for (let lane = 1; lane < plan.lanes; lane++) {
+    out.push({
+      key: `picture:${lane}`,
+      type: "video",
+      name: plan.lanes > 2 ? `Crossfades ${lane}` : "Crossfades",
+      position: 0,
+    });
+  }
+  const soundLanes = new Set(plan.clips.filter((c) => hasSound(c.shot)).map((c) => c.lane));
+  for (let lane = 0; lane < plan.lanes; lane++) {
+    if (!soundLanes.has(lane)) continue;
+    out.push({
+      key: `sound:${lane}`,
+      type: "audio",
+      name: lane === 0 ? "Shot sound" : plan.lanes > 2 ? `Crossfade sound ${lane}` : "Crossfade sound",
+    });
+  }
+  if (plan.narrations.length) out.push({ key: "narration", type: "audio", name: "Narration" });
+  if (hasLeadIns) out.push({ key: "seam", type: "audio", name: "Seam sound" });
+  return out;
 }
 
 /** A clip with its in and out points: `clip/add` through the executor, because the store's

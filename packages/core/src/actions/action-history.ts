@@ -33,6 +33,7 @@ const ACTION_DESCRIPTIONS: Record<
   "clip/split": () => "Split clip",
   "clip/rippleDelete": () => "Ripple delete",
   "clip/duplicate": () => "Duplicate clip",
+  "clip/link": (p) => (p.linkedClipId ? "Link picture and sound" : "Unlink picture and sound"),
   "clip/setBlendMode": () => "Change blend mode",
   "clip/setBlendOpacity": () => "Adjust blend opacity",
   "clip/setEmphasisAnimation": () => "Set emphasis animation",
@@ -144,6 +145,7 @@ export class ActionHistory {
   private maxHistorySize: number;
   private currentGroupId: string | null = null;
   private groupDepth = 0;
+  private groupSerial = 0;
   private snapshots: HistorySnapshot[] = [];
   private listeners: Set<() => void> = new Set();
   private lastActionTime: number = 0;
@@ -226,7 +228,9 @@ export class ActionHistory {
       this.groupDepth += 1;
       return this.currentGroupId;
     }
-    this.currentGroupId = `group-${Date.now()}`;
+    // Unique even for two groups begun in the same millisecond: a shared id made one undo
+    // take back both of them.
+    this.currentGroupId = `group-${Date.now()}-${++this.groupSerial}`;
     this.groupDepth = 1;
     return this.currentGroupId;
   }

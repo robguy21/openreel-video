@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { setSoundFileMaker } from "./project/clip-slice";
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { useProjectStore } from "./project-store";
 import { useEngineStore } from "./engine-store";
 import type {
@@ -2202,19 +2203,94 @@ describe("ProjectStore", () => {
       };
     };
 
-    it("should create one audio clip when media has a single audio track", async () => {
-      useProjectStore.getState().loadProject(createProjectWithVideoClip(1));
+    /** Stands in for extracting the sound to a WAV and importing it (the test browser
+     *  cannot decode): adds an audio item per stream and answers its id. */
+    const fakeSoundFiles = () => {
+      const made: string[] = [];
+      setSoundFileMaker(async (video, index) => {
+        const id = `sound-${video.id}-${index}`;
+        made.push(id);
+        const { project } = useProjectStore.getState();
+        if (!project.mediaLibrary.items.some((m) => m.id === id)) {
+          useProjectStore.setState({
+            project: {
+              ...project,
+              mediaLibrary: {
+                items: [
+                  ...project.mediaLibrary.items,
+                  {
+                    ...project.mediaLibrary.items[0],
+                    id,
+                    name: `${video.name} sound ${index}.wav`,
+                    type: "audio",
+                  },
+                ],
+              },
+            },
+          });
+        }
+        return id;
+      });
+      return made;
+    };
+
+    afterEach(() => setSoundFileMaker(null));
+
+    const withNarrationTrack = (project: Project): Project => ({
+      ...project,
+      timeline: {
+        ...project.timeline,
+        tracks: [
+          ...project.timeline.tracks,
+          {
+            id: "narration-track",
+            type: "audio",
+            name: "Narration",
+            clips: [],
+            transitions: [],
+            locked: false,
+            hidden: false,
+            muted: false,
+            solo: false,
+          },
+        ],
+      },
+    });
+
+    const clipOf = (id: string) =>
+      useProjectStore
+        .getState()
+        .project.timeline.tracks.flatMap((t) => t.clips)
+        .find((c) => c.id === id);
+
+    it("puts the sound on a row of its own under the picture, as an audio file, linked", async () => {
+      fakeSoundFiles();
+      useProjectStore.getState().loadProject(withNarrationTrack(createProjectWithVideoClip(1)));
       const result = await useProjectStore.getState().separateAudio("video-clip-1");
 
       expect(result.success).toBe(true);
       const { project } = useProjectStore.getState();
-      const audioTracks = project.timeline.tracks.filter((t) => t.type === "audio");
-      expect(audioTracks.length).toBe(1);
-      expect(audioTracks[0].clips.length).toBe(1);
-      expect(audioTracks[0].clips[0].mediaId).toBe("video-media-1");
+      // Directly under the picture's row; Narration untouched below it.
+      expect(project.timeline.tracks.map((t) => t.name)).toEqual([
+        "Video",
+        "Video sound",
+        "Narration",
+      ]);
+      const soundRow = project.timeline.tracks[1];
+      expect(soundRow.type).toBe("audio");
+      expect(soundRow.clips).toHaveLength(1);
+      const sound = soundRow.clips[0];
+      expect(sound.mediaId).toBe("sound-video-media-1-0");   // never the video itself
+      expect(project.timeline.tracks[2].clips).toHaveLength(0);
+      // Linked both ways, the picture muted.
+      const picture = clipOf("video-clip-1")!;
+      expect(picture.linkedClipId).toBe(sound.id);
+      expect(sound.linkedClipId).toBe("video-clip-1");
+      expect(picture.volume).toBe(0);
     });
 
-    it("should preserve the video clip source range in separated audio", async () => {
+    it("keeps the clip's source range, volume and fade on the sound", async () => {
+      fakeSoundFiles();
       const project = createProjectWithVideoClip(1);
       const videoTrack = project.timeline.tracks[0];
       const trimmedVideoClip = {
@@ -2225,51 +2301,59 @@ describe("ProjectStore", () => {
         outPoint: 5,
         speed: 1.5,
         reversed: true,
+        volume: 0.6,
+        fade: { fadeIn: 0.25, fadeOut: 0.5 },
       };
-      const trimmedProject = {
+      useProjectStore.getState().loadProject({
         ...project,
         timeline: {
           ...project.timeline,
           tracks: [{ ...videoTrack, clips: [trimmedVideoClip] }],
         },
-      };
-
-      useProjectStore.getState().loadProject(trimmedProject);
+      });
       const result = await useProjectStore.getState().separateAudio("video-clip-1");
 
       expect(result.success).toBe(true);
-      const audioClip = useProjectStore
+      const sound = useProjectStore
         .getState()
         .project.timeline.tracks.find((track) => track.type === "audio")
         ?.clips[0];
-      expect(audioClip).toMatchObject({
+      expect(sound).toMatchObject({
         startTime: 4,
         duration: 3,
         inPoint: 2,
         outPoint: 5,
         speed: 1.5,
         reversed: true,
+        volume: 0.6,
+        fade: { fadeIn: 0.25, fadeOut: 0.5 },
       });
     });
 
-    it("should create multiple audio clips when media has multiple audio tracks", async () => {
+    it("makes a row per sound stream, in order, and links the first", async () => {
+      const made = fakeSoundFiles();
       useProjectStore.getState().loadProject(createProjectWithVideoClip(3));
       const result = await useProjectStore.getState().separateAudio("video-clip-1");
 
       expect(result.success).toBe(true);
+      expect(made).toEqual([
+        "sound-video-media-1-0",
+        "sound-video-media-1-1",
+        "sound-video-media-1-2",
+      ]);
       const { project } = useProjectStore.getState();
-      const audioTracks = project.timeline.tracks.filter((t) => t.type === "audio");
-      expect(audioTracks.length).toBe(3);
-
-      // Each audio track should have one clip with the correct audioTrackIndex
-      for (let i = 0; i < 3; i++) {
-        expect(audioTracks[i].clips.length).toBe(1);
-        expect(audioTracks[i].clips[0].mediaId).toBe("video-media-1");
-        expect(audioTracks[i].clips[0].audioTrackIndex).toBe(i);
-      }
+      const rows = project.timeline.tracks.slice(1);
+      expect(rows.map((t) => [t.type, t.name])).toEqual([
+        ["audio", "Video sound 1"],
+        ["audio", "Video sound 2"],
+        ["audio", "Video sound 3"],
+      ]);
+      expect(rows.map((t) => t.clips[0].mediaId)).toEqual(made);
+      expect(clipOf("video-clip-1")!.linkedClipId).toBe(rows[0].clips[0].id);
     });
 
-    it("should default to one audio track when audioTrackCount is undefined", async () => {
+    it("makes one row when the stream count is not known", async () => {
+      fakeSoundFiles();
       useProjectStore.getState().loadProject(createProjectWithVideoClip(undefined));
       const result = await useProjectStore.getState().separateAudio("video-clip-1");
 
@@ -2277,6 +2361,22 @@ describe("ProjectStore", () => {
       const { project } = useProjectStore.getState();
       const audioTracks = project.timeline.tracks.filter((t) => t.type === "audio");
       expect(audioTracks.length).toBe(1);
+    });
+
+    it("is one undo step, and changes nothing when the sound cannot be made", async () => {
+      fakeSoundFiles();
+      useProjectStore.getState().loadProject(createProjectWithVideoClip(1));
+      await useProjectStore.getState().separateAudio("video-clip-1");
+      await useProjectStore.getState().undo();
+      const { project } = useProjectStore.getState();
+      expect(project.timeline.tracks.map((t) => t.name)).toEqual(["Video"]);
+      expect(clipOf("video-clip-1")).toMatchObject({ volume: 1 });
+      expect(clipOf("video-clip-1")!.linkedClipId).toBeUndefined();
+
+      setSoundFileMaker(async () => null);
+      const refused = await useProjectStore.getState().separateAudio("video-clip-1");
+      expect(refused.success).toBe(false);
+      expect(useProjectStore.getState().project.timeline.tracks).toHaveLength(1);
     });
 
     it("should return an error when clip is not found", async () => {
