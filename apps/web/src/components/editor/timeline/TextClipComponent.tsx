@@ -248,11 +248,11 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
             event.stopPropagation();
             onSelect(textClip.id, event.shiftKey || event.metaKey || event.ctrlKey);
           }}
-          className={`absolute top-1 bottom-1 rounded-lg overflow-hidden cursor-grab group ${
+          className={`absolute top-1 bottom-1 rounded-xl overflow-hidden cursor-grab group ${
             isDragging ? "cursor-grabbing opacity-75" : ""
           } ${
             isSelected
-              ? "ring-2 ring-amber-400 border-amber-400 z-10"
+              ? "or-ring border-amber-400 z-10"
               : "border-amber-500/30 hover:border-amber-500/60 hover:brightness-110"
           } bg-amber-500/20 border`}
           style={{
@@ -287,7 +287,7 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
             </span>
           </div>
           {isSelected && (
-            <div className="absolute inset-0 border-2 border-amber-400 rounded-lg pointer-events-none" />
+            <div className="absolute inset-0 border-2 border-amber-400 rounded-xl pointer-events-none" />
           )}
         </div>
     </ContextMenu>

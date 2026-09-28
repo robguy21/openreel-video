@@ -204,7 +204,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
               <button
                 type="button"
                 aria-label={track.hidden ? "Show track" : "Hide track"}
-                className="text-fg-muted hover:text-fg-2 transition-colors"
+                className="or-focus rounded-full text-fg-muted hover:text-fg-2 transition-colors"
                 onClick={(e) => {
                   e.stopPropagation();
                   hideTrack(track.id, !track.hidden);
@@ -224,7 +224,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   aria-label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`}
                   aria-pressed={track.muted}
                   title={track.muted ? "Unmute track" : "Mute track"}
-                  className={`transition-colors ${
+                  className={`or-focus rounded-full transition-colors ${
                     track.muted ? "text-destructive" : "text-fg-muted hover:text-fg-2"
                   }`}
                   onClick={(e) => {
@@ -243,7 +243,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   aria-label={track.solo ? `Clear solo ${track.name}` : `Solo ${track.name}`}
                   aria-pressed={track.solo}
                   title={track.solo ? "Clear solo" : "Solo track"}
-                  className={`flex h-[18px] min-w-[18px] items-center justify-center rounded px-1 text-[9px] font-black transition-colors ${
+                  className={`or-focus flex h-[18px] min-w-[18px] items-center justify-center rounded px-1 text-[9px] font-black transition-colors ${
                     track.solo
                       ? "bg-status-warning text-black"
                       : "text-fg-muted hover:bg-hover hover:text-fg-2"
@@ -260,7 +260,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
             <button
               type="button"
               aria-label={track.locked ? "Unlock" : "Lock"}
-              className={`transition-colors ${
+              className={`or-focus rounded-full transition-colors ${
                 track.locked ? "text-fg-2" : "text-fg-muted hover:text-fg-2"
               }`}
               onClick={(e) => {

@@ -85,6 +85,52 @@ import { getMomentRuleMessage } from "../../utils/moment-rules";
 import { dropMomentOnTimeline, parseMomentDropPayload } from "./timeline/moment-drop";
 import { momentLaneRole } from "@openreel/core";
 import { LayoutGrid } from "@/icons/lucide-compat";
+import { formatTimecode } from "./timeline/utils";
+import { useStudioStore } from "../../services/studio/studio-session";
+
+/** The width of the track headers' column, which the ruler's corner and the playhead's
+ *  offset share (docs/PROPOSAL_EDITOR_REDESIGN.md R9.3). */
+export const TRACK_HEADER_WIDTH = 170;
+
+type ToolButtonProps = {
+  onClick?: () => void;
+  disabled?: boolean;
+  /** A switch's state; omitted for a plain action. */
+  pressed?: boolean;
+  label: string;
+  children: React.ReactNode;
+};
+
+/** One option in the header's segmented group (Undo . Redo . Snap . Keyframes, R9.1). */
+const SegmentTool: React.FC<ToolButtonProps> = ({ onClick, disabled, pressed, label, children }) => (
+  <button
+    type="button"
+    aria-label={label}
+    aria-pressed={pressed}
+    title={label}
+    onClick={onClick}
+    disabled={disabled}
+    className={`or-focus grid h-[30px] w-8 place-items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+      pressed ? "or-lit" : "text-fg-2 hover:text-fg-strong"
+    }`}
+  >
+    {children}
+  </button>
+);
+
+/** One tool in the vertical column at the timeline's left (R9.2). */
+const ColumnTool: React.FC<ToolButtonProps> = ({ onClick, disabled, label, children }) => (
+  <button
+    type="button"
+    aria-label={label}
+    title={label}
+    onClick={onClick}
+    disabled={disabled}
+    className="or-focus grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full text-fg-2 transition-colors hover:bg-lit hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+  >
+    {children}
+  </button>
+);
 
 const TRACK_LAYER_FILTERS: readonly {
   id: TrackLayerFilter;
@@ -275,6 +321,14 @@ export const Timeline: React.FC = () => {
     keyframeEditorOpen,
     toggleKeyframeEditor,
   } = useUIStore();
+  // What the header names: the part inside a Clip Studio film, the project outside one.
+  const studioPid = useStudioStore((s) => s.pid);
+  const studioName = useStudioStore((s) => s.name);
+  const studioPart = useStudioStore((s) => s.partLabel);
+  const timelineTitle = studioPid ? studioPart || studioName : project.name;
+  // Below this width of lanes the header's controls would be clipped, so the zoom slider
+  // steps aside (the header's widest optional part).
+  const headerCompact = viewportWidth > 0 && viewportWidth < 560;
   const selectedClipIds = getSelectedClipIds();
   const splittableSelectedClipIds = useMemo(
     () =>
@@ -970,7 +1024,7 @@ export const Timeline: React.FC = () => {
       onClick={onClick}
       disabled={disabled}
       data-tip-bottom={title}
-      className={`relative grid place-items-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+      className={`or-focus relative grid h-7 w-7 place-items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
         active ? "text-accent" : "text-fg-muted hover:text-fg-2"
       }`}
     >
@@ -982,70 +1036,46 @@ export const Timeline: React.FC = () => {
   return (
     <div
       data-tour="timeline"
-      className="h-full bg-tl-bg flex flex-col min-h-0 relative overflow-hidden"
+      className="relative flex h-full min-h-0 flex-col overflow-hidden"
     >
-      {/* ── Timeline toolbar (mock: 48px line-icon tools + emerald zoom slider) ── */}
-      <div className="flex items-center h-12 px-4 gap-4 bg-bg-1 border-b border-border shrink-0 relative z-50">
-        <TLTool onClick={undo} disabled={!canUndo()} title="Undo (⌘Z)">
-          <Undo2 size={16} aria-hidden />
-        </TLTool>
-        <TLTool onClick={redo} disabled={!canRedo()} title="Redo (⇧⌘Z)">
-          <Redo2 size={16} aria-hidden />
-        </TLTool>
-        <TLTool
-          onClick={toggleKeyframeEditor}
-          active={keyframeEditorOpen}
-          title="Keyframe editor"
+      {/* The header (R9.1): where the playhead is, what is being cut, then one segmented
+          group - Undo . Redo . Snap . Keyframes - and the track, zoom and size controls. */}
+      <div
+        className={`relative z-50 flex h-14 shrink-0 items-center pl-[22px] pr-4 ${headerCompact ? "gap-1.5" : "gap-3"}`}
+      >
+        <span
+          className="font-mono text-[16px] font-medium tabular-nums text-accent-text"
+          aria-label="Playhead"
         >
-          <Diamond size={16} aria-hidden />
-        </TLTool>
+          {formatTimecode(playheadPosition, project.settings.frameRate || 30)}
+        </span>
+        <span className="min-w-0 truncate text-[13px] text-fg-2" title={timelineTitle} hidden={headerCompact}>
+          {timelineTitle}
+        </span>
+        <div role="group" aria-label="History, snapping and keyframes" className="or-track ml-1.5 shrink-0">
+          <SegmentTool onClick={undo} disabled={!canUndo()} label="Undo (⌘Z)">
+            <Undo2 size={16} aria-hidden />
+          </SegmentTool>
+          <SegmentTool onClick={redo} disabled={!canRedo()} label="Redo (⇧⌘Z)">
+            <Redo2 size={16} aria-hidden />
+          </SegmentTool>
+          <SegmentTool
+            onClick={toggleSnap}
+            pressed={snapSettings.enabled}
+            label={snapSettings.enabled ? "Snap on (N)" : "Snap off (N)"}
+          >
+            <Magnet size={16} aria-hidden />
+          </SegmentTool>
+          <SegmentTool
+            onClick={toggleKeyframeEditor}
+            pressed={keyframeEditorOpen}
+            label="Keyframe editor"
+          >
+            <Diamond size={16} aria-hidden />
+          </SegmentTool>
+        </div>
 
-        <div className="w-px h-[18px] bg-border" />
-
-        <TLTool
-          onClick={handleSplit}
-          disabled={splittableSelectedClipIds.length === 0}
-          title="Split (S)"
-        >
-          <Scissors size={16} aria-hidden />
-        </TLTool>
-        <TLTool
-          onClick={() => handleTrimToPlayhead(true)}
-          disabled={splittableSelectedClipIds.length === 0}
-          title="Trim start to playhead (Q)"
-        >
-          <CornerDownLeft size={16} aria-hidden />
-        </TLTool>
-        <TLTool
-          onClick={() => handleTrimToPlayhead(false)}
-          disabled={splittableSelectedClipIds.length === 0}
-          title="Trim end to playhead (W)"
-        >
-          <CornerDownRight size={16} aria-hidden />
-        </TLTool>
-        <TLTool
-          onClick={handleDelete}
-          disabled={selectedClipIds.length === 0}
-          title="Delete (Del)"
-        >
-          <Trash2 size={16} aria-hidden />
-        </TLTool>
-        <TLTool
-          onClick={handleDuplicate}
-          disabled={selectedClipIds.length === 0}
-          title="Duplicate (⌘D)"
-        >
-          <Copy size={16} aria-hidden />
-        </TLTool>
-        <TLTool
-          onClick={handleRippleDelete}
-          disabled={!canRippleDelete}
-          title="Ripple delete (⇧Del)"
-        >
-          <Delete size={16} aria-hidden />
-        </TLTool>
-
-        <div className="w-px h-[18px] bg-border" />
+        <div className="flex-1" />
 
         <DropdownMenu
           items={addTrackItems}
@@ -1337,13 +1367,17 @@ export const Timeline: React.FC = () => {
 
         <CaptionBatchSelectButton />
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className={`flex shrink-0 items-center ${headerCompact ? "gap-1.5" : "gap-3"}`}>
           {/* Zoom control (mock: minus / emerald slider track + knob / plus) */}
           <div className="flex items-center gap-2.5">
             <TLTool onClick={zoomOut} title="Zoom out">
               <ZoomOut size={16} aria-hidden />
             </TLTool>
-            <div className="relative h-5 w-[150px]">
+            {/* The slider gives way on a narrow timeline; the - and + keep zooming. */}
+            <div
+              className="relative h-5 w-[90px] rounded-full focus-within:[box-shadow:var(--ring-selected)]"
+              hidden={headerCompact}
+            >
               <div
                 aria-hidden="true"
                 className="pointer-events-none absolute left-0 top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-bg-2"
@@ -1399,14 +1433,6 @@ export const Timeline: React.FC = () => {
 
           <div className="flex items-center gap-1">
             <TLTool
-              onClick={toggleSnap}
-              active={snapSettings.enabled}
-              title={snapSettings.enabled ? "Snap on (N)" : "Snap off (N)"}
-            >
-              <Magnet size={16} />
-            </TLTool>
-
-            <TLTool
               onClick={() => {
                 setTrackHeight(64);
                 useTimelineStore.setState({ trackHeights: {} });
@@ -1446,14 +1472,67 @@ export const Timeline: React.FC = () => {
         </div>
       </div>
 
+      <div className="flex min-h-0 flex-1 gap-2.5 px-4 pb-4">
+      {/* The tools, in a column at the left (R9.2): today's toolbar buttons, same actions. */}
+      <div
+        role="toolbar"
+        aria-orientation="vertical"
+        aria-label="Timeline tools"
+        className="flex w-11 shrink-0 flex-col items-center gap-1 rounded-full border border-field-border bg-field py-[5px]"
+      >
+        <ColumnTool
+          onClick={handleSplit}
+          disabled={splittableSelectedClipIds.length === 0}
+          label="Split at playhead (S)"
+        >
+          <Scissors size={16} aria-hidden />
+        </ColumnTool>
+        <ColumnTool
+          onClick={() => handleTrimToPlayhead(true)}
+          disabled={splittableSelectedClipIds.length === 0}
+          label="Trim start to playhead (Q)"
+        >
+          <CornerDownLeft size={16} aria-hidden />
+        </ColumnTool>
+        <ColumnTool
+          onClick={() => handleTrimToPlayhead(false)}
+          disabled={splittableSelectedClipIds.length === 0}
+          label="Trim end to playhead (W)"
+        >
+          <CornerDownRight size={16} aria-hidden />
+        </ColumnTool>
+        <ColumnTool
+          onClick={handleRippleDelete}
+          disabled={!canRippleDelete}
+          label="Ripple delete (⇧Del)"
+        >
+          <Delete size={16} aria-hidden />
+        </ColumnTool>
+        <ColumnTool
+          onClick={handleDuplicate}
+          disabled={selectedClipIds.length === 0}
+          label="Duplicate (⌘D)"
+        >
+          <Copy size={16} aria-hidden />
+        </ColumnTool>
+        <ColumnTool
+          onClick={handleDelete}
+          disabled={selectedClipIds.length === 0}
+          label="Delete (Del)"
+        >
+          <Trash2 size={16} aria-hidden />
+        </ColumnTool>
+      </div>
+
+      {/* The ruler, the track headers and the lanes, in a darker well (R9.3). */}
       <div
         ref={containerRef}
-        className="flex-1 flex flex-col overflow-hidden relative"
+        className="or-field relative flex min-w-0 flex-1 flex-col overflow-hidden"
         onClick={handleBackgroundClick}
       >
         <div className="flex shrink-0">
-          <div className="w-[170px] h-[34px] bg-bg-1 border-b border-r border-border shrink-0" />
-          <div className="flex-1 overflow-hidden relative bg-bg-1 border-b border-border">
+          <div className="h-[34px] shrink-0 border-b border-r border-field-border" style={{ width: TRACK_HEADER_WIDTH }} />
+          <div className="relative flex-1 overflow-hidden border-b border-field-border">
             <div
               style={{
                 width: `${timelineDuration * pixelsPerSecond}px`,
@@ -1487,7 +1566,8 @@ export const Timeline: React.FC = () => {
           <div
             ref={trackHeadersRef}
             data-testid="timeline-track-headers-scroll"
-            className="w-[170px] bg-bg-1 border-r border-border shrink-0 z-20 overflow-y-auto overflow-x-hidden scrollbar-none overscroll-contain"
+            className="z-20 shrink-0 overflow-y-auto overflow-x-hidden overscroll-contain border-r border-field-border scrollbar-none"
+            style={{ width: TRACK_HEADER_WIDTH }}
             onDragOverCapture={handleTrackDragOver}
             onScroll={(e) => {
               const nextScrollTop = e.currentTarget.scrollTop;
@@ -1541,7 +1621,7 @@ export const Timeline: React.FC = () => {
           <div
             ref={tracksRef}
             data-testid="timeline-tracks-scroll"
-            className="flex-1 bg-background relative overflow-auto custom-scrollbar"
+            className="relative flex-1 overflow-auto custom-scrollbar"
             onScroll={(e) => {
               setScrollX(e.currentTarget.scrollLeft);
               const nextScrollTop = e.currentTarget.scrollTop;
@@ -1763,8 +1843,9 @@ export const Timeline: React.FC = () => {
           position={playheadPosition}
           pixelsPerSecond={pixelsPerSecond}
           scrollX={scrollX}
-          headerOffset={170}
+          headerOffset={TRACK_HEADER_WIDTH}
         />
+      </div>
       </div>
     </div>
   );

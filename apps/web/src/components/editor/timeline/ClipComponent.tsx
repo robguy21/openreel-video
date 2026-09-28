@@ -798,7 +798,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          className={`group absolute top-[7px] h-12 rounded-lg overflow-hidden ${
+          className={`or-focus group absolute top-[7px] h-12 rounded-xl overflow-hidden ${
             isDragging
               ? `cursor-grabbing z-50 ${isInvalidDrop ? "opacity-50 ring-2 ring-red-500" : "opacity-90 shadow-lg"}`
               : "cursor-grab"
@@ -806,7 +806,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
             isSelected && !isDragging
               ? isApplyingEffect
                 ? "ring-2 ring-amber-400 z-10"
-                : "ring-2 ring-accent z-10"
+                : "or-ring z-10"
               : !isDragging ? "hover:brightness-[1.04]" : ""
           } ${clipStyle.bg} border ${clipStyle.border} ${
             track.locked ? "cursor-not-allowed opacity-60" : ""
@@ -823,7 +823,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
         >
       {isApplyingEffect && (
         <>
-          <div className="absolute -inset-px rounded-lg border border-amber-300/80 shadow-[0_0_18px_rgba(251,191,36,0.55)] pointer-events-none animate-pulse" />
+          <div className="absolute -inset-px rounded-xl border border-amber-300/80 shadow-[0_0_18px_rgba(251,191,36,0.55)] pointer-events-none animate-pulse" />
           <div className="absolute inset-0 bg-[linear-gradient(110deg,transparent_0%,rgba(255,255,255,0.08)_28%,rgba(251,191,36,0.28)_50%,rgba(255,255,255,0.08)_72%,transparent_100%)] pointer-events-none animate-pulse" />
           <div className="absolute top-1 right-1 rounded-full bg-black/70 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-amber-200 pointer-events-none">
             {effectApplicationLabel ?? "Applying effect"}
@@ -833,7 +833,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
 
       {/* Drag-drop hover indicators for effects/transitions */}
       {dragHover === "effect" && (
-        <div className="absolute inset-0 ring-2 ring-accent ring-inset rounded-lg bg-accent/15 pointer-events-none z-20" />
+        <div className="absolute inset-0 ring-2 ring-accent ring-inset rounded-xl bg-accent/15 pointer-events-none z-20" />
       )}
       {dragHover === "transition-left" && (
         <div className="absolute inset-y-0 left-0 w-1/3 pointer-events-none z-20 bg-gradient-to-r from-accent/60 to-transparent">
@@ -979,7 +979,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
                     y={28 - h}
                     width="2"
                     height={h}
-                    fill="#8cc79a"
+                    fill="var(--waveform)"
                   />
                 );
               })}
@@ -1012,7 +1012,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
             className={`absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-20 flex items-center justify-center transition-opacity ${
               isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
             } ${isSelected ? "bg-primary" : isAudio ? "hover:bg-blue-400/50" : isVideo ? "hover:bg-green-400/50" : "hover:bg-primary/50"}`}
-            style={{ borderRadius: "6px 0 0 6px" }}
+            style={{ borderRadius: "12px 0 0 12px" }}
             onClick={(e) => e.stopPropagation()}
           >
             {isSelected && (
@@ -1024,7 +1024,7 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
             className={`absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-20 flex items-center justify-center transition-opacity ${
               isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
             } ${isSelected ? "bg-primary" : isAudio ? "hover:bg-blue-400/50" : isVideo ? "hover:bg-green-400/50" : "hover:bg-primary/50"}`}
-            style={{ borderRadius: "0 6px 6px 0" }}
+            style={{ borderRadius: "0 12px 12px 0" }}
             onClick={(e) => e.stopPropagation()}
           >
             {isSelected && (

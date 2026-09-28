@@ -23,6 +23,20 @@ interface KeyboardShortcutsOverlayProps {
   onClose: () => void;
 }
 
+/**
+ * Keys this job's monitors and linked clips answer to (docs/PROPOSAL_EDITOR_REDESIGN.md
+ * R10.1). They are handled where they act - the Reference monitor reads its own keys while
+ * it was clicked last - so they are listed here as they are and cannot be rebound.
+ */
+export const FIXED_SHORTCUTS: ReadonlyArray<{ keys: string; name: string; description: string }> = [
+  { keys: "Space", name: "Play / pause the monitor", description: "Space or K, in the monitor clicked last" },
+  { keys: "←", name: "Frame back in the monitor", description: "In the monitor clicked last" },
+  { keys: "→", name: "Frame forward in the monitor", description: "In the monitor clicked last" },
+  { keys: "I", name: "Mark In", description: "In the Reference: a clip's In, which trims it" },
+  { keys: "O", name: "Mark Out", description: "In the Reference: a clip's Out, which trims it" },
+  { keys: "Alt + click", name: "Select one side of a linked pair", description: "The picture or its sound alone" },
+];
+
 export const KeyboardShortcutsOverlay: React.FC<
   KeyboardShortcutsOverlayProps
 > = ({ isOpen, onClose }) => {
@@ -65,6 +79,14 @@ export const KeyboardShortcutsOverlay: React.FC<
       shortcut.description.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
   });
+
+  const query = searchQuery.toLowerCase();
+  const fixedShortcuts =
+    activeCategory === "all"
+      ? FIXED_SHORTCUTS.filter(
+          (f) => query === "" || f.name.toLowerCase().includes(query) || f.description.toLowerCase().includes(query),
+        )
+      : [];
 
   const groupedShortcuts = filteredShortcuts.reduce(
     (acc, shortcut) => {
@@ -301,7 +323,39 @@ export const KeyboardShortcutsOverlay: React.FC<
             ),
           )}
 
-          {filteredShortcuts.length === 0 && (
+          {fixedShortcuts.length > 0 && (
+            <div>
+              <Text
+                as="h3"
+                type="supporting"
+                weight="bold"
+                color="secondary"
+                display="block"
+                className="mb-3 text-xs uppercase"
+              >
+                Monitors and linked clips
+              </Text>
+              <div className="space-y-1">
+                {fixedShortcuts.map((f) => (
+                  <Card key={f.name} variant="transparent" padding={2} className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <Text type="body" display="block">
+                        {f.name}
+                      </Text>
+                      <Text type="supporting" color="secondary" display="block" className="text-[10px]">
+                        {f.description}
+                      </Text>
+                    </div>
+                    <span className="min-w-[80px] text-center font-mono text-[12px] text-fg-2">
+                      {f.keys}
+                    </span>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {filteredShortcuts.length === 0 && fixedShortcuts.length === 0 && (
             <EmptyState
               title="No shortcuts found"
               icon={<Keyboard size={32} className="text-text-muted opacity-30" aria-hidden />}

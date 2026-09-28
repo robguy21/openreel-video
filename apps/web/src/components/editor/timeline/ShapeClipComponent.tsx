@@ -263,11 +263,11 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
             event.stopPropagation();
             onSelect(shapeClip.id, event.shiftKey || event.metaKey || event.ctrlKey);
           }}
-          className={`absolute top-1 bottom-1 rounded-lg overflow-hidden cursor-grab group ${
+          className={`absolute top-1 bottom-1 rounded-xl overflow-hidden cursor-grab group ${
             isDragging ? "cursor-grabbing opacity-75" : ""
           } ${
             isSelected
-              ? `ring-2 ring-${colorClass}-400 border-${colorClass}-400 z-10`
+              ? `or-ring border-${colorClass}-400 z-10`
               : `border-${colorClass}-500/30 hover:border-${colorClass}-500/60 hover:brightness-110`
           } bg-${colorClass}-500/20 border`}
           style={{
@@ -307,7 +307,7 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
             </span>
           </div>
           {isSelected && (
-            <div className="absolute inset-0 border-2 border-green-400 rounded-lg pointer-events-none" />
+            <div className="absolute inset-0 border-2 border-green-400 rounded-xl pointer-events-none" />
           )}
         </div>
     </ContextMenu>
