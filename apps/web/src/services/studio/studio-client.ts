@@ -59,10 +59,21 @@ export interface StudioShot {
   line: { kind?: string; text?: string; subject_id?: string };
   take_id: string | null;
   video: StudioMediaRef | null;
+  /** The take's lossless sound, sample-for-sample what its mp4 carries. */
+  audio?: (StudioMediaRef & { source?: string }) | null;
   narration: (Partial<StudioMediaRef> & { text: string; stale: boolean }) | null;
   include_vo: boolean;
   gap_s: number;
   crossfade_s: number;
+  /** Where the Film stitch cuts this shot's video: frame indices, `end_frame` exclusive
+   *  and null for "to the end". Absent from a studio before chaining (laid whole). */
+  start_frame?: number;
+  end_frame?: number | null;
+  /** The join INTO this shot carries one action straight on: no gap, no transition. */
+  continues?: boolean;
+  /** Milliseconds of the previous shot's `audio`, from its `end_frame`, to lay faded out
+   *  under this shot's start (the stitch's lead-in). 0 or absent is none. */
+  lead_in_ms?: number;
   location_ref: string | null;
 }
 

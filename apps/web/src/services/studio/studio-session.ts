@@ -38,6 +38,7 @@ import {
   type StudioSavedDoc,
   type StudioShot,
 } from "./studio-client";
+import { planTimeline } from "./studio-layout";
 
 export type StudioStatus = "idle" | "opening" | "ready" | "saving" | "exporting" | "error";
 
@@ -226,109 +227,201 @@ export function shotFileName(
   return `${shotPrefix(shot)}${suffix} ${slug}.${ext}`;
 }
 
+/** The extension of a studio asset's path, for the name it gets in the media library. */
+function extOf(asset: string, fallback: string): string {
+  const m = /\.([A-Za-z0-9]+)$/.exec(asset);
+  return m ? m[1].toLowerCase() : fallback;
+}
+
+const AUDIO_TYPES: Record<string, string> = {
+  flac: "audio/flac",
+  wav: "audio/wav",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  ogg: "audio/ogg",
+};
+
+/**
+ * The FIRST timeline of a part: every take in shot order, each trimmed to where the Film
+ * stitch cuts it and each chained cut given the stitch's lead-in (`planTimeline`).
+ *
+ * This runs only when the part has no saved edit. An edit that exists is restored as it
+ * was saved (`restoreSaved`), trims and all, and the manifest's cut points are not applied
+ * to it again: a trim the author dragged is theirs, and the studio's rule is that an edit
+ * keeps what it opened with until its owner asks for the swap. Asking is the studio's
+ * "refresh the sources" (`api_editor_refresh_sources`), which archives the saved edit - so
+ * the next open comes back through here and lays the takes, new or not, at the cut points
+ * the manifest has THEN. There is no per-clip swap in this editor to re-lay one take on
+ * its own; a take changed under a saved edit is shown as drift by the studio instead.
+ */
 async function buildFromManifest(manifest: StudioManifest): Promise<void> {
-  const shots = manifest.shots.filter((s) => s.video);
-  if (!shots.length) {
+  const all = manifest.shots;
+  const indices = all.map((s, i) => (s.video ? i : -1)).filter((i) => i >= 0);
+  if (!indices.length) {
     throw new Error(
       manifest.project.part
         ? "No shot in this part has a rendered take yet - render at least one first."
         : "No shot has a rendered take yet - render at least one in Shots first.",
     );
   }
+  const fps = manifest.fps || 24;
+  // The shots whose sound is laid under the next one's start: known from the manifest
+  // alone, so only those masters are downloaded.
+  const soundFrom = new Set(
+    planTimeline(all, fps, (s) => s.video?.duration_s || 0).leadIns.map((x) => x.from),
+  );
 
   // Download everything first so the project canvas can match the first take.
   progress("Downloading takes…", 0.3);
-  const files: { shot: StudioShot; video: File; narration: File | null }[] = [];
-  for (let i = 0; i < shots.length; i++) {
-    const s = shots[i];
+  const files = new Map<number, { video: File; narration: File | null; sound: File | null }>();
+  for (let n = 0; n < indices.length; n++) {
+    const i = indices[n];
+    const s = all[i];
     const video = await fetchAsFile(s.video!.url, shotFileName(s, "", "mp4"), "video/mp4");
     let narration: File | null = null;
     if (s.narration?.url && s.include_vo) {
       narration = await fetchAsFile(s.narration.url, shotFileName(s, " VO", "mp3"), "audio/mpeg");
     }
-    files.push({ shot: s, video, narration });
-    progress(`Downloading takes… ${i + 1}/${shots.length}`, 0.3 + 0.3 * ((i + 1) / shots.length));
+    let sound: File | null = null;
+    if (soundFrom.has(i) && s.audio?.url) {
+      const ext = extOf(s.audio.asset, "flac");
+      sound = await fetchAsFile(s.audio.url, shotFileName(s, " sound", ext), AUDIO_TYPES[ext] || "audio/flac");
+    }
+    files.set(i, { video, narration, sound });
+    progress(`Downloading takes… ${n + 1}/${indices.length}`, 0.3 + 0.3 * ((n + 1) / indices.length));
   }
-  const dims = await probeVideo(files[0].video);
+  const dims = await probeVideo(files.get(indices[0])!.video);
 
   useProjectStore.getState().createNewProject(editTitleOf(manifest), {
     width: dims.width,
     height: dims.height,
-    frameRate: manifest.fps || 24,
+    frameRate: fps,
   });
 
   // Import into the media library.
   progress("Importing media…", 0.6);
   const media: StudioMediaMap = {};
-  const imported: { shot: StudioShot; videoId: string; narrationId: string | null }[] = [];
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    const vr = await useProjectStore.getState().importMedia(f.video);
-    if (!vr.success || !vr.actionId) {
-      throw new Error(`Could not import ${f.video.name}: ${vr.error?.message ?? "unknown error"}`);
-    }
-    media[vr.actionId] = {
-      url: f.shot.video!.url,
-      asset: f.shot.video!.asset,
-      name: f.video.name,
-      type: "video",
-    };
-    let narrationId: string | null = null;
-    if (f.narration) {
-      const nr = await useProjectStore.getState().importMedia(f.narration);
-      if (nr.success && nr.actionId) {
-        narrationId = nr.actionId;
-        media[nr.actionId] = {
-          url: f.shot.narration!.url!,
-          asset: f.shot.narration!.asset!,
-          name: f.narration.name,
-          type: "audio",
-        };
+  const imported = new Map<number, { videoId: string; narrationId: string | null; soundId: string | null }>();
+  const importOne = async (file: File, what: StudioMediaMap[string], required: boolean) => {
+    const r = await useProjectStore.getState().importMedia(file);
+    if (!r.success || !r.actionId) {
+      if (required) {
+        throw new Error(`Could not import ${file.name}: ${r.error?.message ?? "unknown error"}`);
       }
+      return null;
     }
-    imported.push({ shot: f.shot, videoId: vr.actionId, narrationId });
-    progress(`Importing media… ${i + 1}/${files.length}`, 0.6 + 0.3 * ((i + 1) / files.length));
+    media[r.actionId] = what;
+    return r.actionId;
+  };
+  for (let n = 0; n < indices.length; n++) {
+    const i = indices[n];
+    const s = all[i];
+    const f = files.get(i)!;
+    const videoId = (await importOne(
+      f.video,
+      { url: s.video!.url, asset: s.video!.asset, name: f.video.name, type: "video" },
+      true,
+    ))!;
+    const narrationId = f.narration
+      ? await importOne(
+          f.narration,
+          { url: s.narration!.url!, asset: s.narration!.asset!, name: f.narration.name, type: "audio" },
+          false,
+        )
+      : null;
+    const soundId = f.sound
+      ? await importOne(
+          f.sound,
+          { url: s.audio!.url, asset: s.audio!.asset, name: f.sound.name, type: "audio" },
+          false,
+        )
+      : null;
+    imported.set(i, { videoId, narrationId, soundId });
+    progress(`Importing media… ${n + 1}/${indices.length}`, 0.6 + 0.3 * ((n + 1) / indices.length));
   }
   set({ media });
 
-  // Lay out: one video track in shot order, narration on an audio track underneath,
-  // the studio's per-shot gap and crossfade honoured.
+  // Lay out: one video track in shot order, each clip trimmed to its cut points, narration
+  // on an audio track underneath, the lead-ins on one of their own, the studio's per-shot
+  // gap and crossfade honoured where the seam is a cut.
   progress("Building timeline…", 0.92);
+  const plan = planTimeline(all, fps, (s, i) => {
+    const id = imported.get(i)?.videoId;
+    return (id && useProjectStore.getState().getMediaItem(id)?.metadata.duration) || s.video?.duration_s || 0;
+  });
+  const leadIns = plan.leadIns.filter((x) => imported.get(x.from)?.soundId);
   const videoTrackId = `track-${uuidv4()}`;
   const audioTrackId = `track-${uuidv4()}`;
+  const seamTrackId = `track-${uuidv4()}`;
   await useProjectStore.getState().addTrack("video", undefined, { trackId: videoTrackId, name: "Shots" });
-  if (imported.some((x) => x.narrationId)) {
+  if ([...imported.values()].some((x) => x.narrationId)) {
     await useProjectStore.getState().addTrack("audio", undefined, { trackId: audioTrackId, name: "Narration" });
   }
+  if (leadIns.length) {
+    await useProjectStore.getState().addTrack("audio", undefined, { trackId: seamTrackId, name: "Seam sound" });
+  }
 
-  let t = 0;
   let prevClipId: string | null = null;
-  let pendingCrossfade = 0;
-  for (const x of imported) {
-    const s = useProjectStore.getState();
-    const dur = s.getMediaItem(x.videoId)?.metadata.duration || 0;
-    const r = await s.addClip(videoTrackId, x.videoId, t);
-    if (!r.success) throw new Error(`Could not place ${x.shot.summary}: ${r.error?.message ?? ""}`);
-    const clip = findClipAt(videoTrackId, t);
-    if (x.narrationId) {
-      await useProjectStore.getState().addClip(audioTrackId, x.narrationId, t);
+  for (const c of plan.clips) {
+    const ids = imported.get(c.shot)!;
+    const clip = await placeClip({
+      trackId: videoTrackId,
+      mediaId: ids.videoId,
+      startTime: c.startTime,
+      inPoint: c.inPoint,
+      outPoint: c.outPoint,
+    });
+    if (!clip) throw new Error(`Could not place ${all[c.shot].summary}`);
+    if (ids.narrationId) {
+      await useProjectStore.getState().addClip(audioTrackId, ids.narrationId, c.startTime);
     }
-    if (prevClipId && clip && pendingCrossfade > 0) {
-      await addTransition(prevClipId, clip, "crossfade", pendingCrossfade);
+    if (prevClipId && c.crossfadeIn > 0) {
+      await addTransition(prevClipId, clip, "crossfade", c.crossfadeIn);
     }
     prevClipId = clip;
-    pendingCrossfade = x.shot.crossfade_s || 0;
-    t += dur + (x.shot.gap_s || 0);
+  }
+  for (const x of leadIns) {
+    await placeClip({
+      trackId: seamTrackId,
+      mediaId: imported.get(x.from)!.soundId!,
+      startTime: x.startTime,
+      inPoint: x.inPoint,
+      outPoint: x.inPoint + x.duration,
+      fade: { fadeIn: 0, fadeOut: x.duration },
+    });
   }
 
   // First save so the studio knows an edit exists even if the user closes the tab now.
   await saveToStudio();
 }
 
-function findClipAt(trackId: string, startTime: number): string | null {
-  const track = useProjectStore.getState().project.timeline.tracks.find((tr) => tr.id === trackId);
-  const clip = track?.clips.find((c) => Math.abs(c.startTime - startTime) < 1e-3);
-  return clip?.id ?? null;
+/** A clip with its in and out points: `clip/add` through the executor, because the store's
+ *  own `addClip` takes a start time only and would lay the whole take. Returns its id, or
+ *  null when the executor refused it. */
+async function placeClip(params: {
+  trackId: string;
+  mediaId: string;
+  startTime: number;
+  inPoint: number;
+  outPoint: number;
+  fade?: { fadeIn: number; fadeOut: number };
+}): Promise<string | null> {
+  const { project, actionExecutor } = useProjectStore.getState();
+  const copy = structuredClone(project);
+  const clipId = uuidv4();
+  const result = await actionExecutor.execute(
+    {
+      type: "clip/add",
+      id: uuidv4(),
+      timestamp: Date.now(),
+      params: { ...params, duration: params.outPoint - params.inPoint, clipId },
+    },
+    copy,
+  );
+  if (!result.success) return null;
+  useProjectStore.setState({ project: { ...copy, modifiedAt: Date.now() } });
+  return clipId;
 }
 
 async function addTransition(clipAId: string, clipBId: string, transitionType: string, duration: number) {
