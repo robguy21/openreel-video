@@ -62,6 +62,13 @@ export interface StudioSessionState {
   lastExportAt: number | null;
   media: StudioMediaMap;
   error: string | null;
+  /** The part as the studio's Stitch cut it (the manifest's `stitch_export`), which the
+   *  Reference monitor holds when nothing else is picked; null when the studio offers
+   *  none (never stitched, or a film of several parts). */
+  stitchFilm: { url: string; asset: string; duration: number; fps: number } | null;
+  /** While the studio makes that cut (it does when the part is handed over and today's is
+   *  not on disk): how far it has got, or why it could not be made. */
+  stitchMaking: { progress: number; message: string; failed?: string } | null;
 }
 
 export const useStudioStore = create<StudioSessionState>()(() => ({
@@ -78,6 +85,8 @@ export const useStudioStore = create<StudioSessionState>()(() => ({
   lastExportAt: null,
   media: {},
   error: null,
+  stitchFilm: null,
+  stitchMaking: null,
 }));
 
 const set = useStudioStore.setState;
@@ -161,7 +170,12 @@ async function doOpen(at: StudioRef): Promise<void> {
 
     // 2. what the project looks like now
     const manifest = await fetchManifest(at);
-    set({ name: manifest.project.name, partLabel: partLabelOf(manifest) });
+    set({
+      name: manifest.project.name,
+      partLabel: partLabelOf(manifest),
+      stitchFilm: stitchFilmOf(manifest),
+      stitchMaking: null,
+    });
 
     // 3. restore the part's saved edit, or lay out its takes for the first time
     const saved = manifest.editor_saved ? await fetchSavedDoc(at) : null;
@@ -173,11 +187,52 @@ async function doOpen(at: StudioRef): Promise<void> {
 
     set({ status: "ready", message: "", progress: 1, dirty: false });
     startAutosave();
+
+    // 4. the part as Stitch cuts it, if the studio is still making it: waited for AFTER the
+    // editor is open, so an encode of minutes never holds the timeline back.
+    if (prep.stitch_job) void awaitStitchFilm(at, prep.stitch_job.id);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     set({ status: "error", error: msg, message: "" });
     toast.error("Clip Studio", msg);
     throw e;
+  }
+}
+
+/** The manifest's `stitch_export` as the Reference monitor's film, or null. */
+export function stitchFilmOf(manifest: StudioManifest): StudioSessionState["stitchFilm"] {
+  const ex = manifest.stitch_export;
+  return ex ? { url: ex.url, asset: ex.asset, duration: ex.duration_s, fps: manifest.fps || 24 } : null;
+}
+
+/**
+ * Follow the studio's job making the part's cut, then take the file from a fresh manifest.
+ * Nothing here blocks the editor, and a result that arrives after another part or film
+ * has been opened is dropped.
+ */
+async function awaitStitchFilm(at: StudioRef, jobId: string): Promise<void> {
+  const still = () => get().pid === at.pid && get().part === at.part;
+  set({ stitchMaking: { progress: 0, message: "Making the part's cut…" } });
+  try {
+    await pollJob(at.pid, jobId, (job) => {
+      if (still()) {
+        set({ stitchMaking: { progress: job.progress || 0, message: job.message || "Making the part's cut…" } });
+      }
+    });
+    if (!still()) return;
+    const manifest = await fetchManifest(at);
+    if (!still()) return;
+    set({ stitchFilm: stitchFilmOf(manifest), stitchMaking: null });
+  } catch (e) {
+    if (still()) {
+      set({
+        stitchMaking: {
+          progress: 0,
+          message: "",
+          failed: e instanceof Error ? e.message : String(e),
+        },
+      });
+    }
   }
 }
 

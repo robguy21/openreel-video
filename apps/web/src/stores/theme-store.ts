@@ -10,100 +10,46 @@ interface ThemeState {
   toggleTheme: () => void;
 }
 
-const getSystemTheme = (): "light" | "dark" => {
-  if (typeof window === "undefined") return "dark";
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
-};
-
-const calculateIsDark = (mode: ThemeMode): boolean => {
-  if (mode === "auto") {
-    return getSystemTheme() === "dark";
-  }
-  return mode === "dark";
+/**
+ * Dark only. Clip Studio, which embeds this editor, has one theme and no toggle
+ * (DESIGN.md standards 1-3; docs/PROPOSAL_EDITOR_REDESIGN.md R1.4), so whatever a caller
+ * or an old saved preference asks for, the page is painted dark. The store keeps its
+ * shape so upstream code that reads `mode` or `isDark` keeps compiling.
+ */
+const paintDark = (): void => {
+  if (typeof document === "undefined") return;
+  document.documentElement.classList.add("dark");
+  document.documentElement.dataset.theme = "dark";
 };
 
 export const useThemeStore = create<ThemeState>()(
   persist(
-    (set, get) => ({
-      // Dark by default: Clip Studio, which embeds this editor, is dark-only, and the
-      // toggle in the action rail still cycles dark -> auto -> light for anyone who wants it.
+    (set) => ({
       mode: "dark",
       isDark: true,
 
-      setMode: (mode: ThemeMode) => {
-        const isDark = calculateIsDark(mode);
-        set({ mode, isDark });
-
-        if (isDark) {
-          document.documentElement.classList.add("dark");
-          document.documentElement.dataset.theme = "dark";
-        } else {
-          document.documentElement.classList.remove("dark");
-          document.documentElement.dataset.theme = "light";
-        }
+      setMode: () => {
+        set({ mode: "dark", isDark: true });
+        paintDark();
       },
 
       toggleTheme: () => {
-        const currentMode = get().mode;
-        const nextMode: ThemeMode =
-          currentMode === "light"
-            ? "dark"
-            : currentMode === "dark"
-              ? "auto"
-              : "light";
-        get().setMode(nextMode);
+        set({ mode: "dark", isDark: true });
+        paintDark();
       },
     }),
     {
       name: "openreel-theme",
       onRehydrateStorage: () => (state) => {
         if (state) {
-          const isDark = calculateIsDark(state.mode);
-          state.isDark = isDark;
-          if (isDark) {
-            document.documentElement.classList.add("dark");
-            document.documentElement.dataset.theme = "dark";
-          } else {
-            document.documentElement.classList.remove("dark");
-            document.documentElement.dataset.theme = "light";
-          }
+          state.mode = "dark";
+          state.isDark = true;
         }
+        paintDark();
       },
     },
   ),
 );
 
-if (typeof window !== "undefined") {
-  // First visit (nothing persisted yet): paint the default before React mounts so the
-  // page never flashes light.
-  let hasPersistedTheme = false;
-  try {
-    hasPersistedTheme = window.localStorage.getItem("openreel-theme") !== null;
-  } catch {
-    /* storage blocked: stay with the in-memory default */
-  }
-  if (!hasPersistedTheme) {
-    document.documentElement.classList.add("dark");
-    document.documentElement.dataset.theme = "dark";
-  }
-
-  const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-
-  mediaQuery.addEventListener("change", (e) => {
-    const state = useThemeStore.getState();
-    if (state.mode === "auto") {
-      const isDark = e.matches;
-      useThemeStore.setState({ isDark });
-
-      if (isDark) {
-        document.documentElement.classList.add("dark");
-        document.documentElement.dataset.theme = "dark";
-      } else {
-        document.documentElement.classList.remove("dark");
-        document.documentElement.dataset.theme = "light";
-      }
-    }
-  });
-}
+// Paint before React mounts so the page never flashes light.
+paintDark();

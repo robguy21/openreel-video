@@ -35,7 +35,7 @@ const LevelMeter: React.FC<{ level: number; peak: number }> = ({
   return (
     <div className="flex gap-0.5 h-32 w-4">
       {/* Left channel */}
-      <div className="flex-1 bg-gray-800 rounded-sm overflow-hidden relative">
+      <div className="flex-1 bg-field rounded-sm overflow-hidden relative">
         <div
           className={`absolute bottom-0 left-0 right-0 transition-all duration-75 ${getColor(
             levelPercent,
@@ -49,7 +49,7 @@ const LevelMeter: React.FC<{ level: number; peak: number }> = ({
         />
       </div>
       {/* Right channel (mirror for stereo) */}
-      <div className="flex-1 bg-gray-800 rounded-sm overflow-hidden relative">
+      <div className="flex-1 bg-field rounded-sm overflow-hidden relative">
         <div
           className={`absolute bottom-0 left-0 right-0 transition-all duration-75 ${getColor(
             levelPercent,
@@ -77,7 +77,7 @@ const Fader: React.FC<{
 
   return (
     <div className="flex flex-col items-center gap-1">
-      <span className="text-xs text-gray-400 font-mono w-12 text-center">
+      <span className="text-xs text-fg-3 font-mono w-12 text-center">
         {formatDb(dbValue)} dB
       </span>
       <Slider
@@ -91,19 +91,19 @@ const Fader: React.FC<{
         onChange={onChange}
         isDisabled={disabled}
         valueDisplay="none"
-        className="h-24 w-2 appearance-none bg-gray-700 rounded-full cursor-pointer
+        className="h-24 w-2 appearance-none bg-control rounded-full cursor-pointer
  [writing-mode:vertical-lr] [direction:rtl]
  disabled:opacity-50 disabled:cursor-not-allowed
  [&::-webkit-slider-thumb]:appearance-none
  [&::-webkit-slider-thumb]:w-4
  [&::-webkit-slider-thumb]:h-6
- [&::-webkit-slider-thumb]:bg-gray-300
+ [&::-webkit-slider-thumb]:bg-fg
  [&::-webkit-slider-thumb]:rounded
  [&::-webkit-slider-thumb]:cursor-pointer
  [&::-webkit-slider-thumb]:shadow-md
  [&::-moz-range-thumb]:w-4
  [&::-moz-range-thumb]:h-6
- [&::-moz-range-thumb]:bg-gray-300
+ [&::-moz-range-thumb]:bg-fg
  [&::-moz-range-thumb]:rounded
  [&::-moz-range-thumb]:cursor-pointer
  [&::-moz-range-thumb]:border-0"
@@ -122,7 +122,7 @@ const PanKnob: React.FC<{
 }> = ({ value, onChange, disabled }) => {
   return (
     <div className="flex flex-col items-center gap-1">
-      <span className="text-xs text-gray-400 font-mono">
+      <span className="text-xs text-fg-3 font-mono">
         {formatPan(value)}
       </span>
       <Slider
@@ -135,7 +135,7 @@ const PanKnob: React.FC<{
         onChange={onChange}
         isDisabled={disabled}
         valueDisplay="none"
-        className="w-16 h-2 appearance-none bg-gray-700 rounded-full cursor-pointer
+        className="w-16 h-2 appearance-none bg-control rounded-full cursor-pointer
  disabled:opacity-50 disabled:cursor-not-allowed
  [&::-webkit-slider-thumb]:appearance-none
  [&::-webkit-slider-thumb]:w-3
@@ -206,7 +206,7 @@ export const ChannelStrip: React.FC<ChannelStripProps> = ({
 
   return (
     <div
-      className={`flex flex-col items-center gap-2 p-3 bg-gray-800 rounded-lg min-w-[80px]
+      className={`flex flex-col items-center gap-2 p-3 or-field rounded-field min-w-[80px]
  ${isEffectivelyMuted ? "opacity-60" : ""}`}
       data-testid={`channel-strip-${channel.trackId}`}
     >
@@ -215,7 +215,7 @@ export const ChannelStrip: React.FC<ChannelStripProps> = ({
         <Text
           type="supporting"
           color="secondary"
-          className="text-xs text-gray-300 font-medium truncate w-full text-center"
+          className="text-xs text-fg-2 font-medium truncate w-full text-center"
         >
           <span className="mr-1">{trackTypeIcon}</span>
           {channel.trackName}
@@ -247,11 +247,11 @@ export const ChannelStrip: React.FC<ChannelStripProps> = ({
           onClick={handleMuteClick}
           variant="secondary"
           size="sm"
-          className={`px-2 py-1 text-xs font-bold rounded transition-colors
+          className={`px-2 py-1 text-xs font-bold rounded-pill transition-colors
  ${
    channel.muted
      ? "bg-red-600 text-white"
-     : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+     : "bg-control text-fg-3 hover:bg-lit"
  }`}
         />
 
@@ -261,11 +261,11 @@ export const ChannelStrip: React.FC<ChannelStripProps> = ({
           onClick={handleSoloClick}
           variant={channel.solo ? "primary" : "secondary"}
           size="sm"
-          className={`px-2 py-1 text-xs font-bold rounded transition-colors
+          className={`px-2 py-1 text-xs font-bold rounded-pill transition-colors
  ${
    channel.solo
      ? "bg-yellow-500 text-black"
-     : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+     : "bg-control text-fg-3 hover:bg-lit"
  }`}
         />
       </div>

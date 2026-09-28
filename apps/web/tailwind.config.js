@@ -22,6 +22,7 @@ export default {
         },
         fg: {
           DEFAULT: "var(--fg)",
+          strong: "var(--fg-strong)",
           2: "var(--fg-2)",
           3: "var(--fg-3)",
           muted: "var(--fg-muted)",
@@ -44,7 +45,25 @@ export default {
           // hover background. Maps to the on-accent text token.
           foreground: "var(--accent-fg)",
           glow: "var(--accent-glow)",
+          // accent text on glass, and the filled accent a primary button wears
+          text: "var(--accent-text)",
+          fill: "var(--accent-fill)",
         },
+        // ── Clip Studio glass (docs/PROPOSAL_EDITOR_REDESIGN.md R1.1)
+        glass: {
+          DEFAULT: "var(--glass-fill)",
+          border: "var(--glass-border)",
+        },
+        field: {
+          DEFAULT: "var(--field-fill)",
+          border: "var(--field-border)",
+        },
+        control: {
+          DEFAULT: "var(--control-fill)",
+          border: "var(--control-border)",
+        },
+        lit: "var(--lit)",
+        capsule: "var(--capsule-fill)",
         clip: {
           video: "var(--c-video)",
           text: "var(--c-text)",
@@ -100,14 +119,14 @@ export default {
           muted: "var(--fg-3)",
         },
         status: {
-          success: "var(--accent)",
-          warning: "#eab308",
-          error: "#ef4444",
-          info: "#3b82f6",
+          success: "var(--success)",
+          warning: "var(--warning)",
+          error: "var(--danger)",
+          info: "var(--accent)",
         },
       },
       fontFamily: {
-        sans: ["Inter", "-apple-system", "BlinkMacSystemFont", "system-ui", "sans-serif"],
+        sans: ["Geist", "-apple-system", "BlinkMacSystemFont", "system-ui", "sans-serif"],
         mono: ["Geist Mono", "monospace"],
       },
       boxShadow: {
@@ -117,6 +136,10 @@ export default {
         glow: "0 2px 8px var(--accent-glow)",
         "glow-lg": "0 4px 14px var(--accent-glow)",
         panel: "var(--shadow-md)",
+        glass: "var(--glass-edge), var(--glass-shadow)",
+        control: "var(--glass-edge-control)",
+        field: "var(--glass-edge-field)",
+        selected: "var(--ring-selected)",
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -124,6 +147,13 @@ export default {
         sm: "calc(var(--radius) - 4px)",
         xl: "0.75rem",
         "2xl": "1rem",
+        // Clip Studio's radii, by the part they belong to (_radii.scss)
+        card: "30px",
+        frame: "20px",
+        field: "18px",
+        picture: "16px",
+        tile: "14px",
+        pill: "9999px",
       },
       spacing: {
         topbar: "var(--topbar-h)",

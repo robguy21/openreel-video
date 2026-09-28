@@ -9,10 +9,13 @@ import {
   Play,
   Pause,
   SkipBack,
+  StepBack,
+  StepForward,
+  Maximize,
+  MoreHorizontal,
   SkipForward,
   Volume2,
   VolumeX,
-  Monitor,
   Maximize2,
   Minimize2,
   Move,
@@ -22,6 +25,7 @@ import {
   Magnet,
   Zap,
 } from "@/icons/lucide-compat";
+import { cutEdges, nearestCut } from "./layout/cuts";
 import { ToolcraftButton as Button } from "@openreel/ui";
 import { ToolcraftIconButton as IconButton } from "@openreel/ui";
 import { ToolcraftText as Text } from "@openreel/ui";
@@ -833,7 +837,15 @@ interface ClipWithPlaceholder {
   isPlaceholder?: boolean;
 }
 
-export const Preview: React.FC = () => {
+export interface PreviewProps {
+  /** Drawn in place of the "Player" strip: the editor's Edit monitor header
+   *  (docs/PROPOSAL_EDITOR_REDESIGN.md R6.1). Hidden, as the strip was, when maximised
+   *  or full screen. */
+  header?: React.ReactNode;
+}
+
+export const Preview: React.FC<PreviewProps> = ({ header }) => {
+  const [showMonitorMore, setShowMonitorMore] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const videoAreaRef = useRef<HTMLDivElement>(null);
@@ -1431,7 +1443,6 @@ export const Preview: React.FC = () => {
     pause,
     togglePlayback,
     seekTo,
-    seekRelative,
     setPlayheadPosition,
   } = useTimelineStore();
 
@@ -7453,15 +7464,26 @@ export const Preview: React.FC = () => {
     [actualEndTime, seekTo],
   );
 
-  const handleSkipBack = useCallback(() => {
-    seekRelative(-5);
-  }, [seekRelative]);
+  // Previous / next cut: the nearest clip edge on any video track (R6.2).
+  const handleCut = useCallback(
+    (direction: -1 | 1) => {
+      const current = useTimelineStore.getState().playheadPosition;
+      const fps = project.settings.frameRate || 30;
+      const target = nearestCut(cutEdges(project.timeline.tracks), current, direction, 0.5 / fps);
+      if (target !== null) seekTo(target);
+    },
+    [project.settings.frameRate, project.timeline.tracks, seekTo],
+  );
 
-  const handleSkipForward = useCallback(() => {
-    const current = useTimelineStore.getState().playheadPosition;
-    const end = actualEndTime > 0 ? actualEndTime : project.timeline.duration || 0;
-    seekTo(end > 0 ? Math.min(current + 5, end) : current + 5);
-  }, [seekTo, actualEndTime, project.timeline.duration]);
+  const handleFrameStep = useCallback(
+    (frames: -1 | 1) => {
+      const fps = project.settings.frameRate || 30;
+      const current = useTimelineStore.getState().playheadPosition;
+      const next = Math.max(0, Math.round(current * fps + frames) / fps);
+      seekTo(next);
+    },
+    [project.settings.frameRate, seekTo],
+  );
 
   const handleFullscreen = useCallback(() => {
     const container = containerRef.current;
@@ -7572,7 +7594,8 @@ export const Preview: React.FC = () => {
       className="w-full h-full min-h-0 min-w-0 bg-stage-bg flex flex-col relative group overflow-hidden outline-none"
     >
       {/* ── Panel bar header (mockup: 'Player') ───────────────── */}
-      {!isMaximized && !isFullscreen && (
+      {!isMaximized && !isFullscreen && header}
+      {!isMaximized && !isFullscreen && !header && (
         <div className="flex items-center px-3.5 py-2 border-b border-border bg-bg-1 gap-2.5 min-h-[38px] shrink-0">
           <Text type="label" color="primary" weight="semibold" className="text-[13px] tracking-tight text-fg m-0">Player</Text>
           <div className="ml-auto flex items-center gap-1">
@@ -8073,7 +8096,7 @@ export const Preview: React.FC = () => {
 
       {/* Player Controls with integrated Scrub Bar */}
       <div
-        className={`border-t border-border transition-all duration-300 ${
+        className={`transition-all duration-300 ${
           isMaximized || isFullscreen
             ? "absolute bottom-0 left-0 right-0 z-50 bg-bg-1 backdrop-blur-sm"
             : "z-20 bg-bg-1"
@@ -8092,34 +8115,43 @@ export const Preview: React.FC = () => {
           </div>
         </div>
 
-        {/* Controls row */}
-        <div className="h-12 px-4 flex items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-[13px] tabular-nums tracking-tight font-medium">
-            <span className="text-fg-2">{formatTime(playheadPosition)}</span>
-            <span className="text-fg-muted mx-1.5">/</span>
-            <span className="text-fg-muted">{formatTime(actualEndTime)}</span>
-          </span>
+        {/* Controls row (docs/PROPOSAL_EDITOR_REDESIGN.md R6.2): the timecode in the
+            accent; previous cut, a frame back, play, a frame forward, next cut; full
+            screen; and everything else on the old bar behind "..." */}
+        {/* Three columns, the outer two equal, so the transport is centred under the
+            picture whatever sits either side of it. */}
+        <div className="h-[58px] px-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5">
+        <div className="flex min-w-0 items-baseline gap-1 whitespace-nowrap font-mono text-[11px] tracking-tight tabular-nums">
+          <span className="text-accent-text">{formatTime(playheadPosition)}</span>
+          <span className="truncate text-fg-3">/ {formatTime(actualEndTime)}</span>
         </div>
 
-        <div className="flex items-center gap-4 mx-auto">
+        <div className="flex items-center justify-center gap-0.5">
           <IconButton
-            label="Skip back 5s"
-            icon={<SkipBack size={18} />}
+            label="Previous cut"
+            icon={<SkipBack size={16} />}
             variant="ghost"
             size="sm"
-            onClick={handleSkipBack}
-            className="w-8 h-8 grid place-items-center rounded-md text-fg-2 hover:bg-hover hover:text-fg transition-colors"
+            onClick={() => handleCut(-1)}
+            className="w-[34px] h-[34px] grid place-items-center rounded-full text-fg-2 hover:text-fg"
+          />
+          <IconButton
+            label="Back one frame"
+            icon={<StepBack size={16} />}
+            variant="ghost"
+            size="sm"
+            onClick={() => handleFrameStep(-1)}
+            className="w-[34px] h-[34px] grid place-items-center rounded-full text-fg-2 hover:text-fg"
           />
           <IconButton
             label={playbackLockedReason ?? (isPlaying ? "Pause" : "Play")}
             icon={
               isPlaying ? (
-                <Pause size={18} fill="currentColor" />
+                <Pause size={17} fill="currentColor" />
               ) : playbackLockedReason ? (
-                <Loader2 size={18} className="animate-spin" />
+                <Loader2 size={17} className="animate-spin" />
               ) : (
-                <Play size={18} fill="currentColor" className="ml-0.5" />
+                <Play size={17} fill="currentColor" className="ml-0.5" />
               )
             }
             variant="ghost"
@@ -8128,23 +8160,59 @@ export const Preview: React.FC = () => {
               togglePlayback();
             }}
             isDisabled={Boolean(playbackLockedReason)}
-            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-              playbackLockedReason
-                ? "bg-bg-2 text-fg-muted cursor-not-allowed"
-                : "bg-bg-2 text-fg hover:bg-bg-3"
+            className={`or-control w-[42px] h-[42px] !rounded-full flex items-center justify-center ${
+              playbackLockedReason ? "cursor-not-allowed opacity-60" : ""
             }`}
           />
           <IconButton
-            label="Skip forward 5s"
-            icon={<SkipForward size={18} />}
+            label="Forward one frame"
+            icon={<StepForward size={16} />}
             variant="ghost"
             size="sm"
-            onClick={handleSkipForward}
-            className="w-8 h-8 grid place-items-center rounded-md text-fg-2 hover:bg-hover hover:text-fg transition-colors"
+            onClick={() => handleFrameStep(1)}
+            className="w-[34px] h-[34px] grid place-items-center rounded-full text-fg-2 hover:text-fg"
+          />
+          <IconButton
+            label="Next cut"
+            icon={<SkipForward size={16} />}
+            variant="ghost"
+            size="sm"
+            onClick={() => handleCut(1)}
+            className="w-[34px] h-[34px] grid place-items-center rounded-full text-fg-2 hover:text-fg"
           />
         </div>
 
-        <div className="flex gap-1.5 items-center">
+        <div className="flex items-center justify-end gap-1.5">
+        <IconButton
+          label={isFullscreen ? "Exit Full Screen" : "Full Screen"}
+          icon={<Maximize size={16} />}
+          variant="ghost"
+          size="sm"
+          onClick={handleFullscreen}
+          className="w-[34px] h-[34px] grid place-items-center rounded-full text-fg-2 hover:text-fg"
+        />
+        <div className="relative">
+          <IconButton
+            label="More monitor controls"
+            icon={<MoreHorizontal size={16} />}
+            variant="ghost"
+            size="sm"
+            aria-expanded={showMonitorMore}
+            onClick={() => setShowMonitorMore((open) => !open)}
+            className={`w-[34px] h-[34px] grid place-items-center rounded-full ${
+              showMonitorMore ? "or-lit" : "text-fg-2 hover:text-fg"
+            }`}
+          />
+          {showMonitorMore && (
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setShowMonitorMore(false)}
+            />
+          )}
+        <div
+          hidden={!showMonitorMore}
+          className="absolute bottom-full right-0 z-50 mb-2 w-[236px] rounded-[18px] border border-border bg-bg-elev p-2 shadow-lg [&:not([hidden])]:flex flex-wrap gap-1.5 items-center"
+        >
           <IconButton
             label={isMuted ? "Unmute" : "Mute"}
             icon={isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
@@ -8351,18 +8419,6 @@ export const Preview: React.FC = () => {
           />
 
           <IconButton
-            label={isFullscreen ? "Exit Full Screen" : "Full Screen"}
-            icon={<Monitor size={16} />}
-            variant="ghost"
-            size="sm"
-            onClick={handleFullscreen}
-            className={`w-[34px] h-[34px] grid place-items-center rounded-[7px] transition-colors ${
-              isFullscreen
-                ? "bg-accent-soft text-accent"
-                : "bg-bg-2 text-fg-2 hover:text-fg hover:bg-bg-3"
-            }`}
-          />
-          <IconButton
             label={isMaximized ? "Restore Size" : "Maximize Preview"}
             icon={isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
             variant="ghost"
@@ -8374,6 +8430,8 @@ export const Preview: React.FC = () => {
                 : "bg-bg-2 text-fg-2 hover:text-fg hover:bg-bg-3"
             }`}
           />
+        </div>
+        </div>
         </div>
         </div>
       </div>

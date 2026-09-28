@@ -1,17 +1,23 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState } from "react";
 import { ToolcraftText as Text } from "@openreel/ui";
 
-import { Toolbar } from "./Toolbar";
-import { EditorActionRail } from "./EditorActionRail";
-import { AssetsPanel } from "./AssetsPanel";
 import { Preview } from "./Preview";
-import { InspectorPanel } from "./InspectorPanel";
 import { Timeline } from "./Timeline";
 import { KeyframeEditorPanel } from "./KeyframeEditorPanel";
-import { AudioMixer } from "../audio-mixer";
 import { KeyboardShortcutsOverlay } from "./KeyboardShortcutsOverlay";
 import { PanelErrorBoundary } from "../ErrorBoundary";
 import { SpotlightTour, MoGraphTour } from "./tour";
+import { EditorRoom } from "./layout/EditorRoom";
+import { WorkspaceRail } from "./layout/WorkspaceRail";
+import { WorkspacePanel } from "./layout/WorkspacePanel";
+import { EditorMoreMenu } from "./layout/EditorMoreMenu";
+import { ExportControl } from "./layout/ExportControl";
+import { StudioBackItem, StudioSaveItem } from "./layout/StudioRailItems";
+import { EditMonitorHeader } from "./layout/EditMonitorHeader";
+import { MonitorStage } from "./layout/MonitorStage";
+import { useReferenceSource } from "./layout/useReferenceSource";
+import { useWorkspaceFollowsSelection } from "./layout/useWorkspaceFollowsSelection";
+import { useResizable } from "../../desktop/editor/useResizable";
 import { useProjectStore } from "../../stores/project-store";
 import { useUIStore } from "../../stores/ui-store";
 import { useEngineStore } from "../../stores/engine-store";
@@ -37,39 +43,28 @@ import {
   disposeTransitionBridge,
 } from "../../bridges/transition-bridge";
 
-const ChatPanel = React.lazy(() =>
-  import("./chat/ChatPanel").then((module) => ({ default: module.ChatPanel })),
-);
+/**
+ * The editor's sizes (docs/PROPOSAL_EDITOR_REDESIGN.md R2.2): the workspace panel's
+ * width and the timeline's height, each resizable by dragging the gap beside it and
+ * remembered per browser. The timeline's bounds are fractions of the window, so they
+ * are applied where it is drawn, and the maximise toggle still gives it most of it.
+ */
+const WORKSPACE_W = { initial: 320, min: 280, max: 480 };
+const TIMELINE_H = { initial: 296, minVh: 22, maxVh: 70, maximisedVh: 80 };
+const WORKSPACE_W_KEY = "openreel-layout-workspace-w";
+const TIMELINE_H_KEY = "openreel-layout-timeline-h";
 
-// Timeline area (bottom band) is sized as a vh fraction so the
-// top workspace (media | stage | inspector) gets the rest. The grid
-// from the mockup is `1fr var(--tl-height)` rows — by default
-// timeline is 58vh which leaves the top row with ~38–42vh of stage.
-const DEFAULT_TIMELINE_VH = 42;
-const MIN_TIMELINE_VH = 22;
-const MAX_TIMELINE_VH = 70;
-// Compact mode: timeline takes most of the height, leaving a small preview.
-const COMPACT_TIMELINE_VH = 80;
-
-const DEFAULT_MEDIA_W = 460;
-const MIN_MEDIA_W = 320;
-const MAX_MEDIA_W = 640;
-
-const DEFAULT_INSPECTOR_W = 360;
-const MIN_INSPECTOR_W = 280;
-const MAX_INSPECTOR_W = 560;
-
-const DEFAULT_CHAT_W = 380;
-const MIN_CHAT_W = 320;
-const MAX_CHAT_W = 560;
-
-const MIN_STAGE_W = 380;
-const RESIZE_HANDLE = 10;
-
-type ResizeTarget = "timeline" | "media" | "inspector" | "chat";
-
-const clamp = (value: number, min: number, max: number): number => {
-  return Math.min(Math.max(value, min), max);
+/** The window's height, kept current so the timeline's vh bounds follow a resize. */
+const useViewportHeight = (): number => {
+  const [height, setHeight] = useState(() =>
+    typeof window === "undefined" ? 900 : window.innerHeight,
+  );
+  useEffect(() => {
+    const onResize = () => setHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return height;
 };
 
 /**
@@ -191,23 +186,20 @@ const useEngineInitialization = () => {
     initStatus,
   };
 };
-
 /**
- * Main Editor Interface — v2 cinematic layout.
+ * The editor (docs/PROPOSAL_EDITOR_REDESIGN.md R1-R4): Clip Studio's glass look over the
+ * film's room, laid out like Premiere's Edit screen. There is no top bar (Robert,
+ * 2026-09-28): the way back to the studio heads the rail, Save, Export and "..." are its
+ * foot, and the Edit monitor's header names the film.
  *
- * Grid (per mockup):
+ *   +------+-----------------+--------------------------------------------+
+ *   | rail | workspace panel | stage (the monitors)                       |
+ *   |  72  | 320 (one tab)   +--------------------------------------------+
+ *   |      |                 | timeline                                   |
+ *   +------+-----------------+--------------------------------------------+
  *
- *   ┌─────────────── topbar ───────────────┐
- *   │                                      │
- *   │  media │   stage   │   inspector     │  ← top row (auto-fit)
- *   │   460  │   1fr     │      360        │
- *   ├──────────────────────────────────────┤
- *   │             timeline                 │  ← `tl-height` (vh)
- *   └──────────────────────────────────────┘
- *
- * Column widths and timeline height are user-resizable via the
- * dividers between panels. Values are persisted to CSS custom
- * properties on the root grid so panels can pick them up.
+ * The workspace panel runs the full height and the timeline runs under the monitors
+ * only. Every panel is its own glass card, 12 px apart on 16 px of room.
  */
 export const EditorInterface: React.FC = () => {
   const { initialized, initializing, initError, initStatus } =
@@ -221,10 +213,10 @@ export const EditorInterface: React.FC = () => {
     keyframeEditorOpen,
     setKeyframeEditorOpen,
     getSelectedClipIds,
-    panels,
-    setPanelVisible,
     timelineMaximized,
   } = useUIStore();
+  useWorkspaceFollowsSelection();
+  useReferenceSource();
   const { project, updateClipKeyframes } = useProjectStore();
   const tracks = project.timeline.tracks;
 
@@ -315,116 +307,29 @@ export const EditorInterface: React.FC = () => {
     [],
   );
 
-  // ── Layout state (resizable columns and timeline band) ──────────
-  const rootRef = useRef<HTMLDivElement>(null);
-  const resizeRef = useRef<ResizeTarget | null>(null);
-  const [mediaWidth, setMediaWidth] = useState(DEFAULT_MEDIA_W);
-  const [inspectorWidth, setInspectorWidth] = useState(DEFAULT_INSPECTOR_W);
-  const [chatWidth, setChatWidth] = useState(DEFAULT_CHAT_W);
-  const [timelineVh, setTimelineVh] = useState(DEFAULT_TIMELINE_VH);
-
-  const chatVisible = panels.agentChat?.visible ?? false;
-
-  const mediaRef = useRef(mediaWidth);
-  const inspectorRef = useRef(inspectorWidth);
-  const chatRef = useRef(chatWidth);
-  useEffect(() => {
-    mediaRef.current = mediaWidth;
-  }, [mediaWidth]);
-  useEffect(() => {
-    inspectorRef.current = inspectorWidth;
-  }, [inspectorWidth]);
-  useEffect(() => {
-    chatRef.current = chatWidth;
-  }, [chatWidth]);
-
-  const beginResize = useCallback(
-    (target: ResizeTarget) => (e: React.MouseEvent) => {
-      e.preventDefault();
-      resizeRef.current = target;
-      document.body.style.cursor =
-        target === "timeline" ? "row-resize" : "col-resize";
-      document.body.style.userSelect = "none";
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const root = rootRef.current;
-      const target = resizeRef.current;
-      if (!root || !target) return;
-      const rect = root.getBoundingClientRect();
-      const chatOpen =
-        useUIStore.getState().panels.agentChat?.visible ?? false;
-      const chatOffset = chatOpen ? chatRef.current + RESIZE_HANDLE : 0;
-
-      if (target === "media") {
-        const maxByStage =
-          rect.width - inspectorRef.current - chatOffset - MIN_STAGE_W;
-        setMediaWidth(
-          clamp(e.clientX - rect.left, MIN_MEDIA_W, Math.min(MAX_MEDIA_W, maxByStage)),
-        );
-        return;
-      }
-      if (target === "inspector") {
-        const maxByStage =
-          rect.width - mediaRef.current - chatOffset - MIN_STAGE_W;
-        setInspectorWidth(
-          clamp(
-            rect.right - chatOffset - e.clientX,
-            MIN_INSPECTOR_W,
-            Math.min(MAX_INSPECTOR_W, maxByStage),
-          ),
-        );
-        return;
-      }
-      if (target === "chat") {
-        const maxByStage =
-          rect.width -
-          mediaRef.current -
-          inspectorRef.current -
-          2 * RESIZE_HANDLE -
-          MIN_STAGE_W;
-        setChatWidth(
-          clamp(
-            rect.right - e.clientX,
-            MIN_CHAT_W,
-            Math.min(MAX_CHAT_W, maxByStage),
-          ),
-        );
-        return;
-      }
-      // timeline: vh based on the distance from bottom of the viewport
-      const vh = ((window.innerHeight - e.clientY) / window.innerHeight) * 100;
-      setTimelineVh(clamp(vh, MIN_TIMELINE_VH, MAX_TIMELINE_VH));
-    };
-
-    const onUp = () => {
-      resizeRef.current = null;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, []);
-
-  // Reflect resized panel sizes back into CSS variables so child styles
-  // (timeline header padding, etc.) can react.
-  useEffect(() => {
-    const r = rootRef.current;
-    if (!r) return;
-    const tlVh = timelineMaximized ? COMPACT_TIMELINE_VH : timelineVh;
-    r.style.setProperty("--media-w", `${mediaWidth}px`);
-    r.style.setProperty("--inspector-w", `${inspectorWidth}px`);
-    r.style.setProperty("--chat-w", `${chatWidth}px`);
-    r.style.setProperty("--tl-height", `${tlVh}vh`);
-  }, [mediaWidth, inspectorWidth, chatWidth, timelineVh, timelineMaximized]);
+  // ── Layout: sizes the reader chose, remembered per browser ─────
+  const viewportH = useViewportHeight();
+  const workspace = useResizable({
+    initial: WORKSPACE_W.initial,
+    min: WORKSPACE_W.min,
+    max: WORKSPACE_W.max,
+    axis: "x",
+    direction: 1,
+    storageKey: WORKSPACE_W_KEY,
+  });
+  const timelineMin = (viewportH * TIMELINE_H.minVh) / 100;
+  const timelineMax = (viewportH * TIMELINE_H.maxVh) / 100;
+  const timeline = useResizable({
+    initial: TIMELINE_H.initial,
+    min: timelineMin,
+    max: timelineMax,
+    axis: "y",
+    direction: -1,
+    storageKey: TIMELINE_H_KEY,
+  });
+  const timelineHeight = timelineMaximized
+    ? (viewportH * TIMELINE_H.maximisedVh) / 100
+    : Math.min(Math.max(timeline.value, timelineMin), timelineMax);
 
   if (initializing || !initialized) {
     return (
@@ -440,165 +345,100 @@ export const EditorInterface: React.FC = () => {
       </div>
     );
   }
-
-  // ── Render ───────────────────────────────────────────────────────
-  // Grid template uses inline CSS for the resizable columns. The CSS
-  // variables `--media-w`, `--inspector-w`, `--tl-height` are kept in
-  // sync via the effect above so other components can use them too.
-  const effectiveTimelineVh = timelineMaximized
-    ? COMPACT_TIMELINE_VH
-    : timelineVh;
-  const gridStyle: React.CSSProperties = chatVisible
-    ? {
-        gridTemplateColumns: `${mediaWidth}px ${RESIZE_HANDLE}px 1fr ${RESIZE_HANDLE}px ${inspectorWidth}px ${RESIZE_HANDLE}px ${chatWidth}px`,
-        gridTemplateRows: `1fr ${RESIZE_HANDLE}px ${effectiveTimelineVh}vh`,
-        gridTemplateAreas:
-          "'media mh stage ih inspector ch chat' 'th th th th th th th' 'timeline timeline timeline timeline timeline timeline timeline'",
-      }
-    : {
-        gridTemplateColumns: `${mediaWidth}px ${RESIZE_HANDLE}px 1fr ${RESIZE_HANDLE}px ${inspectorWidth}px`,
-        gridTemplateRows: `1fr ${RESIZE_HANDLE}px ${effectiveTimelineVh}vh`,
-        gridTemplateAreas:
-          "'media mh stage ih inspector' 'th th th th th' 'timeline timeline timeline timeline timeline'",
-      };
+  const gridStyle: React.CSSProperties = {
+    gridTemplateColumns: `72px ${workspace.value}px minmax(0, 1fr)`,
+    gridTemplateRows: `minmax(0, 1fr) ${Math.round(timelineHeight)}px`,
+    gridTemplateAreas: '"rail work stage" "rail work tl"',
+  };
 
   return (
-    <div
-      ref={rootRef}
-      className="w-full h-full bg-bg text-fg overflow-hidden font-sans select-none relative z-20 flex flex-col"
-    >
-      <Toolbar />
+    <div className="relative z-20 h-full w-full select-none overflow-hidden font-sans text-fg">
+      <EditorRoom />
 
-      <div className="flex-1 min-h-0 flex">
-        <EditorActionRail />
-        <div
-          className="flex-1 min-h-0 grid gap-0 bg-bg p-2.5"
-          style={gridStyle}
-        >
-        <div
-          className="bg-bg-1 min-w-0 min-h-0 overflow-hidden rounded-xl border border-border shadow-sm"
-          style={{ gridArea: "media" }}
-        >
-          <PanelErrorBoundary name="Media">
-            <AssetsPanel />
-          </PanelErrorBoundary>
-        </div>
+      <div className="relative flex h-full flex-col p-4">
+        <div className="grid min-h-0 flex-1 gap-3" style={gridStyle}>
+          <div className="flex min-h-0" style={{ gridArea: "rail" }}>
+            <WorkspaceRail
+              top={<StudioBackItem />}
+              foot={
+                <>
+                  <StudioSaveItem />
+                  <ExportControl />
+                  <EditorMoreMenu onShowShortcuts={() => setShowShortcutsOverlay(true)} />
+                </>
+              }
+            />
+          </div>
 
-        <div
-          className="grid place-items-center cursor-col-resize group/h"
-          style={{ gridArea: "mh" }}
-          onMouseDown={beginResize("media")}
-        >
-          <span className="h-10 w-1 rounded-full bg-transparent group-hover/h:bg-accent/40 transition-colors" />
-        </div>
-
-        <div
-          className="bg-stage-bg min-w-0 min-h-0 overflow-hidden rounded-xl border border-border shadow-sm"
-          style={{ gridArea: "stage" }}
-        >
-          <PanelErrorBoundary name="Stage">
-            <Preview />
-          </PanelErrorBoundary>
-        </div>
-
-        <div
-          className="grid place-items-center cursor-col-resize group/h"
-          style={{ gridArea: "ih" }}
-          onMouseDown={beginResize("inspector")}
-        >
-          <span className="h-10 w-1 rounded-full bg-transparent group-hover/h:bg-accent/40 transition-colors" />
-        </div>
-
-        <div
-          className="bg-bg-1 min-w-0 min-h-0 overflow-hidden rounded-xl border border-border shadow-sm"
-          style={{ gridArea: "inspector" }}
-        >
-          <PanelErrorBoundary name="Inspector">
-            <InspectorPanel />
-          </PanelErrorBoundary>
-        </div>
-
-        {chatVisible && (
-          <>
+          <div className="relative flex min-h-0 min-w-0 flex-col" style={{ gridArea: "work" }}>
+            <WorkspacePanel />
             <div
-              className="grid place-items-center cursor-col-resize group/h"
-              style={{ gridArea: "ch" }}
-              onMouseDown={beginResize("chat")}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the workspace panel"
+              onPointerDown={workspace.onHandlePointerDown}
+              className="group absolute -right-[9px] bottom-0 top-0 z-10 flex w-[6px] cursor-col-resize items-center justify-center"
             >
-              <span className="h-10 w-1 rounded-full bg-transparent group-hover/h:bg-accent/40 transition-colors" />
+              <span className="h-10 w-1 rounded-full bg-transparent transition-colors group-hover:bg-accent-glow" />
             </div>
+          </div>
 
-            <div
-              className="bg-bg-1 min-w-0 min-h-0 overflow-hidden rounded-xl border border-border shadow-sm"
-              style={{ gridArea: "chat" }}
-            >
-              <PanelErrorBoundary name="AI Editor">
-                <React.Suspense
-                  fallback={
-                    <div className="grid h-full place-items-center text-xs text-fg-muted">
-                      Loading AI Editor…
-                    </div>
-                  }
+          <div className="min-h-0 min-w-0" style={{ gridArea: "stage" }}>
+            <MonitorStage
+              edit={
+                <section
+                  aria-label="Edit monitor"
+                  className="or-glass or-see-through flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
                 >
-                  <ChatPanel
-                    onClose={() => setPanelVisible("agentChat", false)}
-                  />
-                </React.Suspense>
-              </PanelErrorBoundary>
+                  <PanelErrorBoundary name="Stage">
+                    <Preview header={<EditMonitorHeader />} />
+                  </PanelErrorBoundary>
+                </section>
+              }
+            />
+          </div>
+
+          <section
+            aria-label="Timeline"
+            className="or-glass or-see-through relative flex min-h-0 min-w-0 flex-col overflow-visible"
+            style={{ gridArea: "tl" }}
+          >
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize the timeline"
+              onPointerDown={timelineMaximized ? undefined : timeline.onHandlePointerDown}
+              className="group absolute -top-[9px] left-0 right-0 z-10 flex h-[6px] cursor-row-resize items-center justify-center"
+            >
+              <span className="h-1 w-10 rounded-full bg-transparent transition-colors group-hover:bg-accent-glow" />
             </div>
-          </>
-        )}
-
-        <div
-          className="grid place-items-center cursor-row-resize group/h"
-          style={{ gridArea: "th" }}
-          onMouseDown={beginResize("timeline")}
-        >
-          <span className="w-10 h-1 rounded-full bg-transparent group-hover/h:bg-accent/40 transition-colors" />
-        </div>
-
-        <div
-          className="bg-tl-bg min-w-0 min-h-0 overflow-hidden flex flex-col rounded-xl border border-border shadow-sm"
-          style={{ gridArea: "timeline" }}
-        >
-          {panels.audioMixer?.visible && (
-            <div className="shrink-0 border-b border-border">
-              <PanelErrorBoundary name="Audio Mixer">
-                <AudioMixer
-                  visible
-                  onClose={() => setPanelVisible("audioMixer", false)}
-                />
-              </PanelErrorBoundary>
-            </div>
-          )}
-
-          <div className="flex-1 min-h-0 flex">
-            <div className="flex-1 min-w-0 min-h-0">
-              <PanelErrorBoundary name="Timeline">
-                <Timeline />
-              </PanelErrorBoundary>
-            </div>
-
-            {keyframeEditorOpen && (
-              <div className="shrink-0 min-w-0 border-l border-border">
-                <PanelErrorBoundary name="Keyframe Editor">
-                  <KeyframeEditorPanel
-                    clip={selectedClip}
-                    onClose={() => setKeyframeEditorOpen(false)}
-                    onUpdateKeyframe={handleUpdateKeyframe}
-                    onDeleteKeyframe={handleDeleteKeyframe}
-                    onCopyKeyframes={handleCopyKeyframes}
-                    onPasteKeyframes={handlePasteKeyframes}
-                    selectedKeyframeIds={selectedKeyframeIds}
-                    onSelectKeyframe={handleSelectKeyframe}
-                    copiedKeyframes={copiedKeyframes}
-                  />
+            <div className="flex min-h-0 flex-1 overflow-hidden rounded-card">
+              <div className="min-h-0 min-w-0 flex-1">
+                <PanelErrorBoundary name="Timeline">
+                  <Timeline />
                 </PanelErrorBoundary>
               </div>
-            )}
-          </div>
+
+              {keyframeEditorOpen && (
+                <div className="min-w-0 shrink-0 border-l border-glass-border">
+                  <PanelErrorBoundary name="Keyframe Editor">
+                    <KeyframeEditorPanel
+                      clip={selectedClip}
+                      onClose={() => setKeyframeEditorOpen(false)}
+                      onUpdateKeyframe={handleUpdateKeyframe}
+                      onDeleteKeyframe={handleDeleteKeyframe}
+                      onCopyKeyframes={handleCopyKeyframes}
+                      onPasteKeyframes={handlePasteKeyframes}
+                      selectedKeyframeIds={selectedKeyframeIds}
+                      onSelectKeyframe={handleSelectKeyframe}
+                      copiedKeyframes={copiedKeyframes}
+                    />
+                  </PanelErrorBoundary>
+                </div>
+              )}
+            </div>
+          </section>
         </div>
-      </div>
       </div>
 
       <KeyboardShortcutsOverlay

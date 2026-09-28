@@ -107,15 +107,8 @@ export function useTour() {
     }
   }, []);
 
-  useEffect(() => {
-    const completed = localStorage.getItem(ONBOARDING_KEY);
-    if (!completed) {
-      const timer = setTimeout(() => {
-        start();
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [start]);
+  // The tour never opens by itself: Clip Studio's editor starts on the reader's film, and
+  // the tour is one click away as "Editor tour" in the top bar's "..." menu.
 
   useEffect(() => {
     if (!state.isActive) return;

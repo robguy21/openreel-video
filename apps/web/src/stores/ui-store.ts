@@ -25,6 +25,35 @@ export type SelectionType =
 
 export type DesktopPage = "edit" | "motion" | "color" | "deliver";
 
+/**
+ * The tabs of the editor's one sidebar (docs/PROPOSAL_EDITOR_REDESIGN.md R4), in the
+ * order the rail shows them. The workspace panel shows one at a time.
+ */
+export const WORKSPACE_TABS = [
+  "media",
+  "properties",
+  "text",
+  "graphics",
+  "effects",
+  "transitions",
+  "moments",
+  "audio",
+  "templates",
+  "assistant",
+  "history",
+] as const;
+
+export type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
+
+export const DEFAULT_WORKSPACE_TAB: WorkspaceTab = "media";
+
+export function isWorkspaceTab(value: unknown): value is WorkspaceTab {
+  return (
+    typeof value === "string" &&
+    (WORKSPACE_TABS as readonly string[]).includes(value)
+  );
+}
+
 export interface SelectionItem {
   type: SelectionType;
   id: string;
@@ -99,6 +128,8 @@ export interface UIState {
   motionPathClipId: string | null;
   keyframeEditorOpen: boolean;
   inspectorActiveTab: string;
+  workspaceTab: WorkspaceTab;
+  setWorkspaceTab: (tab: WorkspaceTab) => void;
   desktopPage: DesktopPage;
   setDesktopPage(page: DesktopPage): void;
   select: (item: SelectionItem, addToSelection?: boolean) => void;
@@ -207,6 +238,29 @@ const DEFAULT_PANELS: Record<PanelId, PanelState> = {
   agentChat: { visible: false, width: 380 },
 };
 
+/** Upgrades what `openreel-ui-preferences` saved under an older store version. */
+export function migrateUIPreferences(
+  persisted: unknown,
+  version: number,
+): Record<string, unknown> {
+  const state = (persisted ?? {}) as Record<string, unknown>;
+  if (version === 0) {
+    state.snapSettings = DEFAULT_SNAP_SETTINGS;
+  }
+  if (version < 2) {
+    const panels = (state.panels ?? {}) as Record<string, PanelState>;
+    if (!panels.agentChat) {
+      panels.agentChat = DEFAULT_PANELS.agentChat;
+    }
+    state.panels = panels;
+  }
+  if (version < 3 || !isWorkspaceTab(state.workspaceTab)) {
+    // v3: the one sidebar's tab. Nothing before it had one to carry over.
+    state.workspaceTab = DEFAULT_WORKSPACE_TAB;
+  }
+  return state;
+}
+
 export const useUIStore = create<UIState>()(
   subscribeWithSelector(
     persist(
@@ -249,6 +303,8 @@ export const useUIStore = create<UIState>()(
         keyframeEditorOpen: false,
 
         inspectorActiveTab: "transform",
+
+        workspaceTab: DEFAULT_WORKSPACE_TAB,
 
         desktopPage: "edit",
 
@@ -585,6 +641,10 @@ export const useUIStore = create<UIState>()(
           set({ inspectorActiveTab: tabId });
         },
 
+        setWorkspaceTab: (tab: WorkspaceTab) => {
+          set({ workspaceTab: tab });
+        },
+
         setDesktopPage: (page) => set({ desktopPage: page }),
 
         setShowWelcomeScreen: (show: boolean) => {
@@ -600,21 +660,8 @@ export const useUIStore = create<UIState>()(
       }),
       {
         name: "openreel-ui-preferences",
-        version: 2,
-        migrate: (persisted: unknown, version: number) => {
-          const state = persisted as Record<string, unknown>;
-          if (version === 0) {
-            state.snapSettings = DEFAULT_SNAP_SETTINGS;
-          }
-          if (version < 2) {
-            const panels = (state.panels ?? {}) as Record<string, PanelState>;
-            if (!panels.agentChat) {
-              panels.agentChat = DEFAULT_PANELS.agentChat;
-            }
-            state.panels = panels;
-          }
-          return state;
-        },
+        version: 3,
+        migrate: migrateUIPreferences,
         partialize: (state) => ({
           snapSettings: state.snapSettings,
           panels: state.panels,
@@ -628,6 +675,7 @@ export const useUIStore = create<UIState>()(
           playbackQuality: state.playbackQuality,
           skipWelcomeScreen: state.skipWelcomeScreen,
           inspectorActiveTab: state.inspectorActiveTab,
+          workspaceTab: state.workspaceTab,
           desktopPage: state.desktopPage,
           showMomentOverlays: state.showMomentOverlays,
         }),

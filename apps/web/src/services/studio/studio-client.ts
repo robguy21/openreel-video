@@ -158,7 +158,14 @@ export async function fetchManifest(ref: StudioRef): Promise<StudioManifest> {
 
 export async function prepareNarration(
   ref: StudioRef,
-): Promise<{ queued: boolean; missing: number; job?: StudioJob }> {
+): Promise<{
+  queued: boolean;
+  missing: number;
+  job?: StudioJob;
+  /** The part as Stitch cuts it, being made for the Reference monitor; the editor opens
+   *  without waiting for it. Absent when it is on disk already, or from an older studio. */
+  stitch_job?: StudioJob;
+}> {
   return json(
     await fetch(projectUrl(ref, "editor/prepare"), {
       method: "POST",

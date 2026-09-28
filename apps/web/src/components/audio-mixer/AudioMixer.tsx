@@ -42,12 +42,12 @@ const MasterChannel: React.FC<{
   };
 
   return (
-    <div className="flex flex-col items-center gap-2 p-3 bg-gray-900 rounded-lg min-w-[100px] border border-gray-700">
-      <Text type="label" weight="bold" className="text-xs text-gray-300">MASTER</Text>
+    <div className="flex flex-col items-center gap-2 p-3 or-field rounded-field min-w-[100px] border-field-border">
+      <Text type="label" weight="bold" className="text-xs text-fg-2">MASTER</Text>
 
       {/* Stereo level meter */}
       <div className="flex gap-1 h-32 w-6">
-        <div className="flex-1 bg-gray-800 rounded-sm overflow-hidden relative">
+        <div className="flex-1 bg-field rounded-sm overflow-hidden relative">
           <div
             className={`absolute bottom-0 left-0 right-0 transition-all duration-75 ${getColor(
               levelPercent,
@@ -59,7 +59,7 @@ const MasterChannel: React.FC<{
             style={{ bottom: `${peakPercent}%` }}
           />
         </div>
-        <div className="flex-1 bg-gray-800 rounded-sm overflow-hidden relative">
+        <div className="flex-1 bg-field rounded-sm overflow-hidden relative">
           <div
             className={`absolute bottom-0 left-0 right-0 transition-all duration-75 ${getColor(
               levelPercent,
@@ -75,7 +75,7 @@ const MasterChannel: React.FC<{
 
       {/* Master fader */}
       <div className="flex flex-col items-center gap-1">
-        <span className="text-xs text-gray-400 font-mono w-12 text-center">
+        <span className="text-xs text-fg-3 font-mono w-12 text-center">
           {formatDb(dbValue)} dB
         </span>
         <Slider
@@ -88,7 +88,7 @@ const MasterChannel: React.FC<{
           value={volume}
           onChange={onVolumeChange}
           valueDisplay="none"
-          className="h-24 w-2 appearance-none bg-gray-700 rounded-full cursor-pointer
+          className="h-24 w-2 appearance-none bg-control rounded-full cursor-pointer
  [writing-mode:vertical-lr] [direction:rtl]
  [&::-webkit-slider-thumb]:appearance-none
  [&::-webkit-slider-thumb]:w-4
@@ -294,14 +294,15 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({
 
   return (
     <div
-      className="bg-gray-900 border-t border-gray-700 p-4"
+      className="p-1"
       data-testid="audio-mixer"
       role="region"
       aria-label="Audio Mixing Console"
     >
-      {/* Header */}
+      {/* Header: the workspace panel titles the mixer itself when it is a tab */}
+      {onClose && (
       <div className="flex items-center justify-between mb-4">
-        <Text type="body" weight="semibold" className="text-lg text-white">Audio Mixer</Text>
+        <Text type="body" weight="semibold" className="text-lg text-fg">Audio Mixer</Text>
         {onClose && (
           <IconButton
             label="Close mixer"
@@ -309,13 +310,14 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({
             icon={<X size={16} aria-hidden />}
             variant="ghost"
             size="sm"
-            className="text-gray-400 hover:text-white transition-colors"
+            className="text-fg-3 hover:text-fg transition-colors"
           />
         )}
       </div>
+      )}
 
       {/* Channel strips container */}
-      <div className="flex gap-2 overflow-x-auto pb-2">
+      <div className="flex flex-wrap gap-2 pb-2">
         {/* Track channel strips (Requirement 20.1) */}
         {channels.length > 0 ? (
           channels.map((channel) => (
@@ -330,7 +332,7 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({
             />
           ))
         ) : (
-          <Text type="supporting" color="secondary" className="text-gray-500 text-sm py-8 px-4">
+          <Text type="supporting" color="secondary" className="text-fg-muted text-sm py-8 px-4">
             No audio tracks in timeline. Add audio or video tracks to see
             channel strips.
           </Text>
@@ -338,7 +340,7 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({
 
         {/* Separator */}
         {channels.length > 0 && (
-          <div className="w-px bg-gray-700 mx-2 self-stretch" />
+          <div className="w-px bg-border mx-1 self-stretch" />
         )}
 
         {/* Master channel */}
@@ -351,11 +353,11 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({
       </div>
 
       {/* Status bar */}
-      <div className="mt-3 pt-3 border-t border-gray-800 flex items-center justify-between text-xs text-gray-500">
+      <div className="mt-3 pt-3 border-t border-border flex flex-wrap items-center justify-between gap-1 text-xs text-fg-muted">
         <span>
           {channels.length} channel{channels.length !== 1 ? "s" : ""}
           {hasSoloedTracks && (
-            <span className="ml-2 text-yellow-500">• Solo active</span>
+            <span className="ml-2 text-status-warning">• Solo active</span>
           )}
         </span>
         <span>

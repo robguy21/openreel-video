@@ -8,6 +8,7 @@ import React, {
 import {
   Undo2,
   Redo2,
+  Diamond,
   Layers,
   Maximize2,
   Minimize2,
@@ -270,6 +271,8 @@ export const Timeline: React.FC = () => {
     toggleSnap,
     timelineMaximized,
     toggleTimelineMaximized,
+    keyframeEditorOpen,
+    toggleKeyframeEditor,
   } = useUIStore();
   const selectedClipIds = getSelectedClipIds();
   const splittableSelectedClipIds = useMemo(
@@ -1023,6 +1026,13 @@ export const Timeline: React.FC = () => {
         </TLTool>
         <TLTool onClick={redo} disabled={!canRedo()} title="Redo (⇧⌘Z)">
           <Redo2 size={16} aria-hidden />
+        </TLTool>
+        <TLTool
+          onClick={toggleKeyframeEditor}
+          active={keyframeEditorOpen}
+          title="Keyframe editor"
+        >
+          <Diamond size={16} aria-hidden />
         </TLTool>
 
         <div className="w-px h-[18px] bg-border" />

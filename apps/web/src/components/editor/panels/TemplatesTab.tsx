@@ -12,7 +12,11 @@ import type {
 } from "@openreel/core";
 import { TEMPLATE_CATEGORIES } from "@openreel/core";
 
-export const TemplatesTab: React.FC = () => {
+/** `showMotionCreator` false hides the way into the Motion Design side, which Clip
+ *  Studio's editor does not show (Robert, 2026-09-28). */
+export const TemplatesTab: React.FC<{ showMotionCreator?: boolean }> = ({
+  showMotionCreator = true,
+}) => {
   const getTemplateEngine = useEngineStore((s) => s.getTemplateEngine);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -150,6 +154,7 @@ export const TemplatesTab: React.FC = () => {
         ))}
       </div>
 
+      {showMotionCreator && (
       <button
         type="button"
         aria-label="Start a Motion Creator template"
@@ -176,6 +181,7 @@ export const TemplatesTab: React.FC = () => {
           </span>
         </span>
       </button>
+      )}
 
       {filteredTemplates.length === 0 ? (
         <div className="text-center py-8 text-text-muted text-xs">

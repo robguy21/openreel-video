@@ -32,7 +32,9 @@ interface DisplayEntry {
   groupId?: string;
 }
 
-export const HistoryPanel: React.FC = () => {
+/** `titled` false leaves the heading to a host that already names the panel (the
+ *  editor's History tab); the undo and redo buttons stay. */
+export const HistoryPanel: React.FC<{ titled?: boolean }> = ({ titled = true }) => {
   const { actionHistory, undo, redo, canUndo, canRedo, clipUndoStack, clipRedoStack } = useProjectStore();
   const [combinedHistory, setCombinedHistory] = useState<DisplayEntry[]>([]);
   const [snapshots, setSnapshots] = useState<HistorySnapshot[]>([]);
@@ -131,13 +133,15 @@ export const HistoryPanel: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-3 border-b border-border">
+      <div className={`flex items-center p-3 border-b border-border ${titled ? "justify-between" : "justify-end"}`}>
+        {titled && (
         <div className="flex items-center gap-2">
           <History size={14} className="text-primary" aria-hidden />
           <Text type="body" color="primary" weight="bold" className="text-sm">
             History
           </Text>
         </div>
+        )}
         <div className="flex items-center gap-1">
           <IconButton
             label={`Undo (${undoCount})`}
