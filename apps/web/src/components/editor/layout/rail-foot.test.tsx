@@ -1,8 +1,9 @@
 import "../../../test/install-local-storage-mock";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useStudioStore } from "../../../services/studio/studio-session";
-import { StudioBackItem, StudioSaveItem } from "./StudioRailItems";
+import { useTimelineStore } from "../../../stores/timeline-store";
+import { pauseAllPlayback, StudioBackItem, StudioSaveItem } from "./StudioRailItems";
 import { EditMonitorHeader, monitorSubtitle } from "./EditMonitorHeader";
 import { EditorMoreMenu } from "./EditorMoreMenu";
 
@@ -60,6 +61,23 @@ describe("the rail's studio items", () => {
     const save = screen.getByRole("button", { name: /Save the edit/ });
     expect(save).toBeEnabled();
     expect(save).toHaveTextContent("Save");
+  });
+});
+
+describe("pausing when the studio hides the frame", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+    useTimelineStore.setState({ playbackState: "stopped" });
+  });
+
+  it("stops the timeline and every media element", () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    document.body.append(document.createElement("video"), document.createElement("audio"));
+    useTimelineStore.setState({ playbackState: "playing" });
+    pauseAllPlayback();
+    expect(useTimelineStore.getState().playbackState).toBe("paused");
+    expect(pause).toHaveBeenCalledTimes(2);
   });
 });
 

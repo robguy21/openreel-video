@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect } from "react";
 import { useStudioStore, saveToStudio } from "../../../services/studio/studio-session";
 import { studioHomeUrl } from "../../../services/studio/studio-client";
+import { getPlaybackBridge } from "../../../bridges/playback-bridge";
+import { useTimelineStore } from "../../../stores/timeline-store";
 import { RailGlyph, RailLabel, RailButton, railItemClass } from "./RailItem";
 
 /**
@@ -21,6 +23,22 @@ export const EDITOR_BACK = "clip-studio:editor-back";
  *  way back is never left without the studio's (studio/frontend `EDITOR_CHROME`). */
 export const EDITOR_CHROME = "clip-studio:editor-chrome";
 
+/** What the studio page posts to this frame when it hides it: the studio keeps the frame
+ *  alive while other pages show, and a hidden frame gets no visibilitychange, so without
+ *  this the cut plays on unseen (studio/frontend `components/Editor.jsx`, `EDITOR_HIDDEN`). */
+export const EDITOR_HIDDEN = "clip-studio:editor-hidden";
+
+/** Stops everything that can sound: the Edit monitor, the way the Reference monitor stops
+ *  it, and any media element, which is how the Reference monitor itself plays. */
+export function pauseAllPlayback(): void {
+  try {
+    getPlaybackBridge().pause();
+  } catch {
+    useTimelineStore.getState().pause();
+  }
+  document.querySelectorAll("video, audio").forEach((el) => (el as HTMLMediaElement).pause());
+}
+
 const BackGlyph = (
   <RailGlyph>
     <path d="M15 5l-7 7 7 7" />
@@ -34,6 +52,15 @@ export const StudioBackItem: React.FC = () => {
   const embedded = typeof window !== "undefined" && window.self !== window.top;
   useEffect(() => {
     if (pid && embedded) window.parent.postMessage({ type: EDITOR_CHROME }, window.location.origin);
+  }, [pid, embedded]);
+  useEffect(() => {
+    if (!pid || !embedded) return undefined;
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent) return;
+      if (event.data?.type === EDITOR_HIDDEN) pauseAllPlayback();
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
   }, [pid, embedded]);
   if (!pid) return null;
   if (embedded) {
