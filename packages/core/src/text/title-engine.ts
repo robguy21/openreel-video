@@ -216,6 +216,12 @@ export class TitleEngine {
     height: number,
     time: number = 0,
     contentScale: { x: number; y: number } = { x: 1, y: 1 },
+    frame: { x: number; y: number; width: number; height: number } = {
+      x: 0,
+      y: 0,
+      width,
+      height,
+    },
   ): TextRenderResult {
     let canvas: HTMLCanvasElement | OffscreenCanvas;
     let ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -266,12 +272,12 @@ export class TitleEngine {
       };
     }
 
-    const metrics = this.measureText(visibleText, style, width);
+    const metrics = this.measureText(visibleText, style, frame.width);
 
     ctx.save();
 
-    const posX = transform.position.x * width;
-    const posY = transform.position.y * height;
+    const posX = frame.x + transform.position.x * frame.width;
+    const posY = frame.y + transform.position.y * frame.height;
 
     ctx.translate(posX, posY);
     ctx.rotate((transform.rotation * Math.PI) / 180);
