@@ -212,7 +212,7 @@ export class ExportEngine {
     try {
       yield this.createProgress("preparing", 0, totalFrames, 0, 0);
 
-      await backend.start(fullSettings, project, writableStream);
+      await backend.start(fullSettings, project, writableStream, timelineDuration);
 
       if (backend.audioBeforeVideo) {
         try {

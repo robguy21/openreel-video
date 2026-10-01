@@ -39,7 +39,12 @@ type ExportType =
   | "1080p-high"
   | "4k-60-master"
   | "1080p-60"
+  | "phone-720"
+  | "phone-1080"
   | "project";
+
+const isVerticalSize = (width: number, height: number) => width / height < 0.9;
+const hd = (vertical: boolean) => (vertical ? { width: 1080, height: 1920 } : { width: 1920, height: 1080 });
 
 const ExportGlyph = (
   <RailGlyph>
@@ -143,13 +148,16 @@ export const ExportControl: React.FC = () => {
     const duration = project.timeline.duration;
     const estimates = new Map<string, TimeEstimate>();
 
+    const fullHd = hd(isVerticalSize(project.settings.width, project.settings.height));
     const configs: Array<{ key: string; width: number; height: number; frameRate: number; codec: "h264" | "h265" | "vp9" | "av1" }> = [
       { key: "mp4", width: project.settings.width, height: project.settings.height, frameRate: 30, codec: "h264" },
       { key: "4k", width: 3840, height: 2160, frameRate: 30, codec: "h264" },
       { key: "4k-60-master", width: 3840, height: 2160, frameRate: 60, codec: "h264" },
       { key: "4k-master", width: 3840, height: 2160, frameRate: 30, codec: "h264" },
-      { key: "1080p-high", width: 1920, height: 1080, frameRate: 30, codec: "h264" },
-      { key: "1080p-60", width: 1920, height: 1080, frameRate: 60, codec: "h264" },
+      { key: "1080p-high", ...fullHd, frameRate: 30, codec: "h264" },
+      { key: "1080p-60", ...fullHd, frameRate: 60, codec: "h264" },
+      { key: "phone-720", width: 720, height: 1280, frameRate: 30, codec: "h264" },
+      { key: "phone-1080", width: 1080, height: 1920, frameRate: 30, codec: "h264" },
       { key: "prores", width: project.settings.width, height: project.settings.height, frameRate: 30, codec: "h264" },
     ];
 
@@ -216,6 +224,7 @@ export const ExportControl: React.FC = () => {
             height: project.settings.height,
             frameRate: project.settings.frameRate,
           };
+          const fullHd = hd(isVerticalSize(project.settings.width, project.settings.height));
 
           const presets: Record<string, { settings: Partial<VideoExportSettings>; ext: string }> = {
             mp4: { settings: { ...base, format: "mp4", codec: "h264", bitrate: 12000, quality: 85 }, ext: "mp4" },
@@ -225,8 +234,10 @@ export const ExportControl: React.FC = () => {
             "4k-master": { settings: { ...base, width: 3840, height: 2160, frameRate: 30, format: "mov", codec: "h265", bitrate: 80000, quality: 95 }, ext: "mov" },
             "4k-prores": { settings: { ...base, width: 3840, height: 2160, frameRate: 30, format: "mov", codec: "prores", bitrate: 880000, quality: 100 }, ext: "mov" },
             "4k": { settings: { ...base, width: 3840, height: 2160, frameRate: 30, format: "mp4", codec: "h264", bitrate: 50000, quality: 90 }, ext: "mp4" },
-            "1080p-60": { settings: { ...base, width: 1920, height: 1080, frameRate: 60, format: "mp4", codec: "h264", bitrate: 25000, quality: 95 }, ext: "mp4" },
-            "1080p-high": { settings: { ...base, width: 1920, height: 1080, frameRate: 30, format: "mp4", codec: "h264", bitrate: 20000, quality: 95 }, ext: "mp4" },
+            "1080p-60": { settings: { ...base, ...fullHd, frameRate: 60, format: "mp4", codec: "h264", bitrate: 25000, quality: 95 }, ext: "mp4" },
+            "1080p-high": { settings: { ...base, ...fullHd, frameRate: 30, format: "mp4", codec: "h264", bitrate: 20000, quality: 95 }, ext: "mp4" },
+            "phone-720": { settings: { ...base, width: 720, height: 1280, frameRate: 30, format: "mp4", codec: "h264", bitrate: 5000, quality: 90 }, ext: "mp4" },
+            "phone-1080": { settings: { ...base, width: 1080, height: 1920, frameRate: 30, format: "mp4", codec: "h264", bitrate: 6000, quality: 90 }, ext: "mp4" },
             prores: { settings: { ...base, format: "mov", codec: "prores", bitrate: 220000, quality: 100 }, ext: "mov" },
           };
 
@@ -348,8 +359,8 @@ export const ExportControl: React.FC = () => {
   );
 
   const projectRes = `${project.settings.width}×${project.settings.height}`;
-  const aspectRatio = project.settings.width / project.settings.height;
-  const isVertical = aspectRatio < 0.9;
+  const isVertical = isVerticalSize(project.settings.width, project.settings.height);
+  const fullHdRes = isVertical ? "1080×1920" : "1920×1080";
 
   const exportOptions: Array<{
     label: string;
@@ -386,15 +397,31 @@ export const ExportControl: React.FC = () => {
     {
       label: "1080p High Quality",
       iconName: "film",
-      desc: "1920×1080 30fps - High bitrate",
+      desc: `${fullHdRes} 30fps - High bitrate`,
       type: "1080p-high",
     },
     {
       label: "1080p 60fps",
       iconName: "film",
-      desc: "1920×1080 - Smooth playback",
+      desc: `${fullHdRes} - Smooth playback`,
       type: "1080p-60",
     },
+    ...(isVertical
+      ? [
+          {
+            label: "Phone app 720p (9:16)",
+            iconName: "film",
+            desc: "720×1280 30fps - Plays on every phone",
+            type: "phone-720" as ExportType,
+          },
+          {
+            label: "Phone app 1080p (9:16)",
+            iconName: "film",
+            desc: "1080×1920 30fps - Plays on every phone",
+            type: "phone-1080" as ExportType,
+          },
+        ]
+      : []),
     {
       label: "Audio Only (WAV)",
       iconName: "music.note",

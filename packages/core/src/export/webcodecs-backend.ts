@@ -1,6 +1,7 @@
 import { CODEC_MAP, type VideoExportSettings, type AudioExportSettings, type ExportError } from "./types";
 import type { Project } from "../types/project";
 import type { EncoderBackend } from "./encoder-backend";
+import { rebuildAvcDescription } from "./avc-config";
 
 type MediaBunnyModule = typeof import("mediabunny");
 type AudioBufferSourceInstance = InstanceType<MediaBunnyModule["AudioBufferSource"]>;
@@ -50,6 +51,7 @@ export class WebCodecsBackend implements EncoderBackend {
     settings: VideoExportSettings,
     project: Project,
     writableStream?: FileSystemWritableFileStream,
+    durationSec?: number,
   ): Promise<void> {
     if (!writableStream) {
       throw new Error("No writable stream provided. Export requires a file destination.");
@@ -64,7 +66,6 @@ export class WebCodecsBackend implements EncoderBackend {
       VideoSampleSource,
       AudioBufferSource,
       getFirstEncodableVideoCodec,
-      getFirstEncodableAudioCodec,
       QUALITY_MEDIUM,
     } = this.mediabunny;
 
@@ -79,17 +80,18 @@ export class WebCodecsBackend implements EncoderBackend {
       },
     });
 
+    const fastStart = durationSec ? "reserve" : "in-memory";
     let outputFormat;
     switch (settings.format) {
       case "webm":
         outputFormat = new WebMOutputFormat();
         break;
       case "mov":
-        outputFormat = new MovOutputFormat();
+        outputFormat = new MovOutputFormat({ fastStart });
         break;
       case "mp4":
       default:
-        outputFormat = new Mp4OutputFormat({ fastStart: false });
+        outputFormat = new Mp4OutputFormat({ fastStart });
         break;
     }
 
@@ -150,7 +152,7 @@ export class WebCodecsBackend implements EncoderBackend {
     const audioCodecResult = await this.findSupportedAudioCodec(
       outputFormat,
       settings.audioSettings,
-      getFirstEncodableAudioCodec,
+      settings.format === "webm",
     );
 
     const videoSource = new VideoSampleSource({
@@ -158,13 +160,25 @@ export class WebCodecsBackend implements EncoderBackend {
       bitrate: targetVideoBitrate,
       keyFrameInterval: settings.keyframeInterval / settings.frameRate,
       hardwareAcceleration: selectedHardwareAcceleration,
+      onEncodedPacket: (packet, meta) => {
+        const description = meta?.decoderConfig?.description;
+        if (videoCodec !== "avc" || packet.type !== "key" || !description) return;
+        const rebuilt = rebuildAvcDescription(packet.data, description);
+        if (rebuilt) meta.decoderConfig!.description = rebuilt;
+      },
     });
     const audioSource = new AudioBufferSource({
       codec: audioCodecResult.codec as "aac" | "opus" | "mp3",
       bitrate: audioCodecResult.bitrate,
     });
-    output.addVideoTrack(videoSource);
-    output.addAudioTrack(audioSource);
+    output.addVideoTrack(
+      videoSource,
+      durationSec ? { maximumPacketCount: Math.ceil(durationSec * settings.frameRate) + 64 } : undefined,
+    );
+    output.addAudioTrack(
+      audioSource,
+      durationSec ? { maximumPacketCount: Math.ceil(durationSec * 100) + 256 } : undefined,
+    );
     output.setMetadataTags({
       title: project.name,
       date: new Date(),
@@ -223,92 +237,39 @@ export class WebCodecsBackend implements EncoderBackend {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     outputFormat: { getSupportedAudioCodecs: () => any[] },
     audioSettings: AudioExportSettings,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    getFirstEncodableAudioCodec: (codecs: any[]) => Promise<string | null>,
+    isWebm: boolean,
   ): Promise<{ codec: string; bitrate: number }> {
-    const supportedCodecs = outputFormat.getSupportedAudioCodecs();
-    const requestedBitrate = audioSettings.bitrate * 1000;
+    const { canEncodeAudio } = this.mediabunny;
+    const options = {
+      numberOfChannels: audioSettings.channels,
+      sampleRate: audioSettings.sampleRate,
+    };
 
-    const bitrateFallbacks = [requestedBitrate, 192000, 128000, 96000].filter(
+    if (!isWebm && !(await canEncodeAudio("aac", options))) {
+      const { registerAacEncoder } = await import("@mediabunny/aac-encoder");
+      registerAacEncoder();
+    }
+
+    const candidates: string[] = isWebm ? outputFormat.getSupportedAudioCodecs() : ["aac"];
+    const bitrates = [audioSettings.bitrate * 1000, 192000, 128000, 96000].filter(
       (b, i, arr) => arr.indexOf(b) === i,
     );
 
-    for (const bitrate of bitrateFallbacks) {
-      const codec = await getFirstEncodableAudioCodec(supportedCodecs);
-      if (codec) {
-        const isSupported = await this.isAudioConfigSupported(
-          codec,
-          bitrate,
-          audioSettings.channels,
-          audioSettings.sampleRate,
-        );
-        if (isSupported) {
+    for (const codec of candidates) {
+      for (const bitrate of bitrates) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (await canEncodeAudio(codec as any, { ...options, bitrate })) {
           return { codec, bitrate };
         }
       }
     }
 
-    for (const fallbackCodec of ["aac", "mp3", "opus"]) {
-      if (
-        supportedCodecs.some((c: string) =>
-          String(c).toLowerCase().includes(fallbackCodec) ||
-          (fallbackCodec === "aac" && String(c).toLowerCase().includes("mp4a")),
-        )
-      ) {
-        for (const bitrate of bitrateFallbacks) {
-          const isSupported = await this.isAudioConfigSupported(
-            fallbackCodec,
-            bitrate,
-            audioSettings.channels,
-            audioSettings.sampleRate,
-          );
-          if (isSupported) {
-            return { codec: fallbackCodec, bitrate };
-          }
-        }
-      }
-    }
-
-    const defaultCodec = await getFirstEncodableAudioCodec(supportedCodecs);
-    return {
-      codec: defaultCodec || "aac",
-      bitrate: 128000,
+    const error: ExportError = {
+      code: "UNSUPPORTED_CODEC",
+      message: "No supported audio codec found",
+      phase: "preparing",
+      recoverable: false,
     };
-  }
-
-  private async isAudioConfigSupported(
-    codec: string,
-    bitrate: number,
-    channels: number,
-    sampleRate: number,
-  ): Promise<boolean> {
-    if (typeof AudioEncoder === "undefined") {
-      return true;
-    }
-
-    try {
-      let codecString: string;
-      if (codec === "aac" || codec.includes("mp4a")) {
-        codecString = "mp4a.40.2";
-      } else if (codec === "opus") {
-        codecString = "opus";
-      } else if (codec === "mp3") {
-        codecString = "mp3";
-      } else {
-        codecString = codec;
-      }
-
-      const config: AudioEncoderConfig = {
-        codec: codecString,
-        sampleRate,
-        numberOfChannels: channels,
-        bitrate,
-      };
-
-      const support = await AudioEncoder.isConfigSupported(config);
-      return support.supported === true;
-    } catch {
-      return false;
-    }
+    throw error;
   }
 }

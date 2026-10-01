@@ -10,6 +10,7 @@ export interface EncoderBackend {
     settings: VideoExportSettings,
     project: Project,
     writableStream?: FileSystemWritableFileStream,
+    durationSec?: number,
   ): Promise<void>;
   addVideoFrame(
     frame: ImageBitmap,
