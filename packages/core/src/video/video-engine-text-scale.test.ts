@@ -62,10 +62,27 @@ describe("VideoEngine text output scaling", () => {
       1920,
     );
 
-    expect(renderText).toHaveBeenCalledWith(clip, 540, 960, 0, {
-      x: 0.5,
-      y: 0.5,
-    });
+    expect(renderText).toHaveBeenCalledWith(
+      clip,
+      540,
+      960,
+      0,
+      { x: 0.5, y: 0.5 },
+      { x: 0, y: 0, width: 540, height: 960 },
+    );
     expect(ctx.drawImage).toHaveBeenCalledWith(renderedCanvas, 0, 0);
+
+    renderText.mockClear();
+    await engine.renderTextClipToCanvasCtx(ctx, clip, 0, 1920, 1080, 576, 1024);
+
+    const fit = 1080 / 1024;
+    expect(renderText).toHaveBeenCalledWith(
+      clip,
+      1920,
+      1080,
+      0,
+      { x: fit, y: fit },
+      { x: (1920 - 576 * fit) / 2, y: 0, width: 576 * fit, height: 1080 },
+    );
   });
 });

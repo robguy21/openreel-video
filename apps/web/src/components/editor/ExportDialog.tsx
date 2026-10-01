@@ -193,9 +193,18 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     setCustomSettings((current) =>
-      current.frameRate === frameRate ? current : { ...current, frameRate },
+      current.frameRate === frameRate &&
+      current.width === projectWidth &&
+      current.height === projectHeight
+        ? current
+        : {
+            ...current,
+            frameRate,
+            width: projectWidth,
+            height: projectHeight,
+          },
     );
-  }, [frameRate, isOpen]);
+  }, [frameRate, projectWidth, projectHeight, isOpen]);
 
   const [reduceMode, setReduceMode] = useState<"quality" | "size">("quality");
   const [reduceQuality, setReduceQuality] =

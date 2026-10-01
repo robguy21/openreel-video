@@ -7764,68 +7764,6 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
             </div>
           )}
 
-          {/* Export Overlay */}
-          {exportState.isExporting && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
-              <div
-                role="status"
-                aria-live="polite"
-                className="w-full max-w-[360px] rounded-xl border border-white/15 bg-neutral-950/95 p-5 text-white shadow-2xl"
-              >
-                <div className="mb-5 flex min-w-0 items-start gap-3">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/40">
-                    <Loader2 size={21} className="animate-spin text-primary" />
-                  </div>
-                  <div className="min-w-0 flex-1 pt-0.5">
-                    <Text
-                      type="label"
-                      weight="semibold"
-                      display="block"
-                      className="text-sm leading-5 text-white"
-                    >
-                      Exporting Video
-                    </Text>
-                    <Text
-                      type="supporting"
-                      display="block"
-                      maxLines={2}
-                      className="mt-1 text-xs leading-4 text-white/75"
-                    >
-                      {exportState.phase || "Preparing..."}
-                    </Text>
-                  </div>
-                </div>
-
-                <div className="mb-4 min-w-0">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-[11px] font-medium text-white/80">
-                      Export Progress
-                    </span>
-                    <span className="shrink-0 font-mono text-[11px] font-semibold text-white">
-                      {Math.round(exportState.progress)}%
-                    </span>
-                  </div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-white/15">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all duration-300"
-                      style={{
-                        width: `${Math.min(100, Math.max(0, exportState.progress))}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <Text
-                  type="supporting"
-                  display="block"
-                  className="text-center text-[11px] leading-4 text-white/70"
-                >
-                  You can keep editing once the export finishes.
-                </Text>
-              </div>
-            </div>
-          )}
-
           {/* Resize/Transform Overlay */}
           {!cropMode && showResizeHandles && clipBounds && (
             <div
@@ -8101,6 +8039,67 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
               );
             })}
         </div>
+        {/* Export Overlay */}
+        {exportState.isExporting && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
+            <div
+              role="status"
+              aria-live="polite"
+              className="w-full max-w-[360px] rounded-xl border border-white/15 bg-neutral-950/95 p-5 text-white shadow-2xl"
+            >
+              <div className="mb-5 flex min-w-0 items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/40">
+                  <Loader2 size={21} className="animate-spin text-primary" />
+                </div>
+                <div className="min-w-0 flex-1 pt-0.5">
+                  <Text
+                    type="label"
+                    weight="semibold"
+                    display="block"
+                    className="text-sm leading-5 text-white"
+                  >
+                    Exporting Video
+                  </Text>
+                  <Text
+                    type="supporting"
+                    display="block"
+                    maxLines={2}
+                    className="mt-1 text-xs leading-4 text-white/75"
+                  >
+                    {exportState.phase || "Preparing..."}
+                  </Text>
+                </div>
+              </div>
+
+              <div className="mb-4 min-w-0">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-medium text-white/80">
+                    Export Progress
+                  </span>
+                  <span className="shrink-0 font-mono text-[11px] font-semibold text-white">
+                    {Math.round(exportState.progress)}%
+                  </span>
+                </div>
+                <div className="h-2.5 overflow-hidden rounded-full bg-white/15">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, exportState.progress))}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <Text
+                type="supporting"
+                display="block"
+                className="text-center text-[11px] leading-4 text-white/70"
+              >
+                You can keep editing once the export finishes.
+              </Text>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Player Controls with integrated Scrub Bar */}

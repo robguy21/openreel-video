@@ -1837,14 +1837,23 @@ export class VideoEngine {
     projectHeight: number,
   ): Promise<void> {
     const clipLocalTime = time - textClip.startTime;
+    const scale =
+      projectWidth > 0 && projectHeight > 0
+        ? Math.min(width / projectWidth, height / projectHeight)
+        : 1;
+    const frameWidth = projectWidth > 0 ? projectWidth * scale : width;
+    const frameHeight = projectHeight > 0 ? projectHeight * scale : height;
     const result = titleEngine.renderText(
       textClip,
       width,
       height,
       clipLocalTime,
+      { x: scale, y: scale },
       {
-        x: projectWidth > 0 ? width / projectWidth : 1,
-        y: projectHeight > 0 ? height / projectHeight : 1,
+        x: (width - frameWidth) / 2,
+        y: (height - frameHeight) / 2,
+        width: frameWidth,
+        height: frameHeight,
       },
     );
 
