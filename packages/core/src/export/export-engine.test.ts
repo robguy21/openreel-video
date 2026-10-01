@@ -154,7 +154,7 @@ vi.mock("mediabunny", () => {
     AudioBufferSource: MockAudioBufferSource,
     VideoSample: MockVideoSample,
     getFirstEncodableVideoCodec: mockGetFirstEncodableVideoCodec,
-    getFirstEncodableAudioCodec: vi.fn().mockResolvedValue("aac"),
+    canEncodeAudio: vi.fn().mockResolvedValue(true),
     QUALITY_MEDIUM: 1_000_000,
   };
 });
