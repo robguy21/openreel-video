@@ -48,6 +48,7 @@ import {
 } from "@openreel/ui";
 import { useProjectStore } from "../../stores/project-store";
 import { useTimelineStore, ZOOM_PRESETS } from "../../stores/timeline-store";
+import { useShallow } from "zustand/react/shallow";
 import { useUIStore } from "../../stores/ui-store";
 import { toast } from "../../stores/notification-store";
 import { useEngineStore } from "../../stores/engine-store";
@@ -152,6 +153,8 @@ export const Timeline: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const tracksRef = useRef<HTMLDivElement>(null);
   const trackHeadersRef = useRef<HTMLDivElement>(null);
+  const followPausedRef = useRef(false);
+  const autoScrollLeftRef = useRef<number | null>(null);
   const suppressNextBackgroundClickRef = useRef(false);
   const trackDragPointerYRef = useRef<number | null>(null);
   const trackDragAutoScrollFrameRef = useRef<number | null>(null);
@@ -257,7 +260,6 @@ export const Timeline: React.FC = () => {
   }, [draggedTrackId]);
 
   const {
-    playheadPosition,
     playbackState,
     pixelsPerSecond,
     scrollX,
@@ -273,7 +275,25 @@ export const Timeline: React.FC = () => {
     setTrackHeight,
     setTrackHeightById,
     getTrackHeight,
-  } = useTimelineStore();
+  } = useTimelineStore(
+    useShallow((s) => ({
+      playbackState: s.playbackState,
+      pixelsPerSecond: s.pixelsPerSecond,
+      scrollX: s.scrollX,
+      scrollY: s.scrollY,
+      viewportWidth: s.viewportWidth,
+      setScrollX: s.setScrollX,
+      setScrollY: s.setScrollY,
+      setViewportDimensions: s.setViewportDimensions,
+      zoomIn: s.zoomIn,
+      zoomOut: s.zoomOut,
+      setZoom: s.setZoom,
+      trackHeight: s.trackHeight,
+      setTrackHeight: s.setTrackHeight,
+      setTrackHeightById: s.setTrackHeightById,
+      getTrackHeight: s.getTrackHeight,
+    })),
+  );
 
   const [showLayersPanel, setShowLayersPanel] = useState(false);
   const [trackLayerQuery, setTrackLayerQuery] = useState("");
@@ -330,10 +350,12 @@ export const Timeline: React.FC = () => {
   // steps aside (the header's widest optional part).
   const headerCompact = viewportWidth > 0 && viewportWidth < 560;
   const selectedClipIds = getSelectedClipIds();
+  const splittableKey = useTimelineStore((s) =>
+    getSplittableTimelineItemIds(project, selectedClipIds, s.playheadPosition).join("\u0000"),
+  );
   const splittableSelectedClipIds = useMemo(
-    () =>
-      getSplittableTimelineItemIds(project, selectedClipIds, playheadPosition),
-    [playheadPosition, project, selectedClipIds],
+    () => (splittableKey ? splittableKey.split("\u0000") : []),
+    [splittableKey],
   );
   const selectedMediaClipIds = useMemo(
     () =>
@@ -508,8 +530,15 @@ export const Timeline: React.FC = () => {
 
   useEffect(() => {
     if (playbackState !== "playing") return;
+    followPausedRef.current = false;
+    autoScrollLeftRef.current = null;
+  }, [playbackState]);
+
+  useEffect(() => {
+    if (playbackState !== "playing") return;
+    const follow = (playheadPosition: number) => {
     const el = tracksRef.current;
-    if (!el) return;
+    if (!el || followPausedRef.current) return;
 
     const playheadPixels = playheadPosition * pixelsPerSecond;
     // Keep the playhead in the left portion of the viewport during playback so
@@ -522,8 +551,14 @@ export const Timeline: React.FC = () => {
 
     if (playheadPixels > followThreshold || playheadPixels < scrollX) {
       el.scrollLeft = Math.max(0, playheadPixels - leftMargin);
+      autoScrollLeftRef.current = el.scrollLeft;
     }
-  }, [playheadPosition, playbackState, pixelsPerSecond, scrollX, viewportWidth]);
+    };
+    follow(useTimelineStore.getState().playheadPosition);
+    return useTimelineStore.subscribe((state, prev) => {
+      if (state.playheadPosition !== prev.playheadPosition) follow(state.playheadPosition);
+    });
+  }, [playbackState, pixelsPerSecond, scrollX, viewportWidth]);
 
   const handleSelectClip = useCallback(
     (clipId: string, addToSelection: boolean, alone = false) => {
@@ -635,10 +670,10 @@ export const Timeline: React.FC = () => {
       await splitTimelineItem(
         store,
         clipId,
-        playheadPosition,
+        useTimelineStore.getState().playheadPosition,
       );
     }
-  }, [playheadPosition, splittableSelectedClipIds]);
+  }, [splittableSelectedClipIds]);
 
   const handleDelete = useCallback(async () => {
     if (selectedClipIds.length === 0) return;
@@ -674,12 +709,12 @@ export const Timeline: React.FC = () => {
         await trimTimelineItemToPlayhead(
           store,
           id,
-          playheadPosition,
+          useTimelineStore.getState().playheadPosition,
           trimStart,
         );
       }
     },
-    [playheadPosition, splittableSelectedClipIds],
+    [splittableSelectedClipIds],
   );
 
   const handleBackgroundClick = useCallback(() => {
@@ -1047,7 +1082,7 @@ export const Timeline: React.FC = () => {
           className="font-mono text-[16px] font-medium tabular-nums text-accent-text"
           aria-label="Playhead"
         >
-          {formatTimecode(playheadPosition, project.settings.frameRate || 30)}
+          <PlayheadTimecode frameRate={project.settings.frameRate || 30} />
         </span>
         <span className="min-w-0 truncate text-[13px] text-fg-2" title={timelineTitle} hidden={headerCompact}>
           {timelineTitle}
@@ -1623,7 +1658,17 @@ export const Timeline: React.FC = () => {
             data-testid="timeline-tracks-scroll"
             className="relative flex-1 overflow-auto custom-scrollbar"
             onScroll={(e) => {
-              setScrollX(e.currentTarget.scrollLeft);
+              const nextScrollLeft = e.currentTarget.scrollLeft;
+              const timelineState = useTimelineStore.getState();
+              if (
+                timelineState.playbackState === "playing" &&
+                Math.abs(nextScrollLeft - timelineState.scrollX) > 0.5 &&
+                (autoScrollLeftRef.current === null ||
+                  Math.abs(nextScrollLeft - autoScrollLeftRef.current) > 1)
+              ) {
+                followPausedRef.current = true;
+              }
+              setScrollX(nextScrollLeft);
               const nextScrollTop = e.currentTarget.scrollTop;
               const headers = trackHeadersRef.current;
               if (headers && Math.abs(headers.scrollTop - nextScrollTop) > 0.5) {
@@ -1689,6 +1734,7 @@ export const Timeline: React.FC = () => {
                   }
                 }
                 if (snapSettings.snapToPlayhead) {
+                  const playheadPosition = useTimelineStore.getState().playheadPosition;
                   const distToPlayhead = Math.abs(rawTime - playheadPosition);
                   if (distToPlayhead < threshold && distToPlayhead < bestDist) {
                     snappedTime = playheadPosition;
@@ -1839,8 +1885,7 @@ export const Timeline: React.FC = () => {
           </div>
         </div>
 
-        <Playhead
-          position={playheadPosition}
+        <LivePlayhead
           pixelsPerSecond={pixelsPerSecond}
           scrollX={scrollX}
           headerOffset={TRACK_HEADER_WIDTH}
@@ -1852,3 +1897,13 @@ export const Timeline: React.FC = () => {
 };
 
 export default Timeline;
+
+const PlayheadTimecode: React.FC<{ frameRate: number }> = ({ frameRate }) => {
+  const playheadPosition = useTimelineStore((s) => s.playheadPosition);
+  return <>{formatTimecode(playheadPosition, frameRate)}</>;
+};
+
+const LivePlayhead: React.FC<Omit<React.ComponentProps<typeof Playhead>, "position">> = (props) => {
+  const playheadPosition = useTimelineStore((s) => s.playheadPosition);
+  return <Playhead position={playheadPosition} {...props} />;
+};

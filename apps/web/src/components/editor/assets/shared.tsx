@@ -345,7 +345,7 @@ export const MediaThumbnail: React.FC<{
               <div
                 key={i}
                 className="flex-1 bg-primary/30 rounded-full"
-                style={{ height: `${Math.random() * 100}%` }}
+                style={{ height: `${30 + ((i * 37 + item.id.length * 11) % 70)}%` }}
               />
             ))}
           </div>

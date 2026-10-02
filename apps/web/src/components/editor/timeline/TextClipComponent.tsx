@@ -44,7 +44,6 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     time: textClip.startTime,
   });
   const { snapSettings } = useUIStore();
-  const { playheadPosition } = useTimelineStore();
   const trimStartRef = useRef<{
     mouseX: number;
     startTime: number;
@@ -108,7 +107,7 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
         rawTime,
         textClip.id,
         allTracks,
-        playheadPosition,
+        useTimelineStore.getState().playheadPosition,
         dragSnapSettings,
         pixelsPerSecond,
         textClip.duration,
@@ -161,7 +160,6 @@ export const TextClipComponent: React.FC<TextClipComponentProps> = ({
     dragOffset,
     onMoveClip,
     snapSettings,
-    playheadPosition,
     endTimingGesture,
     timelineRef,
     allTracks,

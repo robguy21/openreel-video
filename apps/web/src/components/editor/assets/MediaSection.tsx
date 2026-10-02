@@ -49,7 +49,6 @@ export const MediaSection: React.FC<MediaSectionProps> = ({
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"all" | MediaItem["type"]>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const playheadPosition = useTimelineStore((state) => state.playheadPosition);
 
   const [isDragOver, setIsDragOver] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -299,8 +298,8 @@ export const MediaSection: React.FC<MediaSectionProps> = ({
 
   const addMediaToTimeline = useCallback(async (item: MediaItem) => {
     const { addClipToNewTrack } = useProjectStore.getState();
-    await addClipToNewTrack(item.id, playheadPosition);
-  }, [playheadPosition]);
+    await addClipToNewTrack(item.id, useTimelineStore.getState().playheadPosition);
+  }, []);
 
   const handleConfirmAspectRatioMatch = useCallback(async () => {
     if (!aspectRatioDialogData) return;

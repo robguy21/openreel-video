@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import React, {
   useRef,
   useEffect,
@@ -104,6 +105,7 @@ import { captureNativeVideoFrame } from "./preview/video-frame";
 import { MomentOverlay } from "./preview/MomentOverlay";
 import { ProcessingOverlay } from "./ProcessingOverlay";
 import { editingFrameDurationMs } from "./editing-frame-rate";
+import { sequentialCanvasReader, type CanvasReader } from "./sequential-canvas-reader";
 import {
   getPersonSegmentationEngine,
   getBackgroundRemovalEngine,
@@ -850,6 +852,27 @@ export interface PreviewProps {
   header?: React.ReactNode | ((zoom: MonitorZoom) => React.ReactNode);
 }
 
+const PLAYING_PLAYHEAD_STEPS_PER_S = 4;
+
+const NATIVE_OVERLAP_TOLERANCE_S = 1e-3;
+
+const LiveProgressFill: React.FC<{ end: number }> = ({ end }) => {
+  const playheadPosition = useTimelineStore((s) => s.playheadPosition);
+  return (
+    <div
+      className="h-full bg-accent relative pointer-events-none shadow-glow"
+      style={{ width: `${end > 0 ? (playheadPosition / end) * 100 : 0}%` }}
+    >
+      <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity transform scale-0 group-hover:scale-100 duration-100 border border-black/20" />
+    </div>
+  );
+};
+
+const LiveTime: React.FC<{ format: (t: number) => string }> = ({ format }) => {
+  const playheadPosition = useTimelineStore((s) => s.playheadPosition);
+  return <>{format(playheadPosition)}</>;
+};
+
 export const Preview: React.FC<PreviewProps> = ({ header }) => {
   const [showMonitorMore, setShowMonitorMore] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1440,7 +1463,6 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
   const select = useUIStore((state) => state.select);
 
   const {
-    playheadPosition,
     playbackState,
     playbackLockedReason,
     playbackRate,
@@ -1449,7 +1471,23 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
     togglePlayback,
     seekTo,
     setPlayheadPosition,
-  } = useTimelineStore();
+  } = useTimelineStore(
+    useShallow((s) => ({
+      playbackState: s.playbackState,
+      playbackLockedReason: s.playbackLockedReason,
+      playbackRate: s.playbackRate,
+      isScrubbing: s.isScrubbing,
+      pause: s.pause,
+      togglePlayback: s.togglePlayback,
+      seekTo: s.seekTo,
+      setPlayheadPosition: s.setPlayheadPosition,
+    })),
+  );
+  const playheadPosition = useTimelineStore((s) =>
+    s.playbackState === "playing"
+      ? Math.floor(s.playheadPosition * PLAYING_PLAYHEAD_STEPS_PER_S) / PLAYING_PLAYHEAD_STEPS_PER_S
+      : s.playheadPosition,
+  );
 
   useEffect(() => {
     isScrubbingRef.current = isScrubbing;
@@ -1722,6 +1760,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
       {
         input: { [Symbol.dispose]?: () => void };
         sink: unknown;
+        reader: CanvasReader;
         mediaId: string;
         clipId: string;
         trackIndex: number;
@@ -1745,6 +1784,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
   const cleanupPlaybackResources = useCallback(() => {
     const resources = playbackResourcesRef.current;
     for (const [, resource] of resources) {
+      resource.reader.close();
       resource.input[Symbol.dispose]?.();
     }
     playbackResourcesRef.current = new Map();
@@ -3507,7 +3547,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
         const current = allVideoClips[i];
         const next = allVideoClips[i + 1];
         const currentEnd = current.clip.startTime + current.clip.duration;
-        if (next.clip.startTime < currentEnd) {
+        if (next.clip.startTime < currentEnd - NATIVE_OVERLAP_TOLERANCE_S) {
           return { canUse: false, clips: [] };
         }
       }
@@ -4562,6 +4602,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
           const sink = new CanvasSink(videoTrack, {
             poolSize: 3,
           });
+          const reader = sequentialCanvasReader(sink);
 
           const speedEngine = getSpeedEngine();
           const clipLocalTime = Math.max(0, timelinePosition - clip.startTime);
@@ -4653,15 +4694,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
                 return;
               }
 
-              const frameResult = await (
-                sink as {
-                  getCanvas: (time: number) => Promise<{
-                    canvas: HTMLCanvasElement | OffscreenCanvas;
-                    timestamp: number;
-                    duration: number;
-                  } | null>;
-                }
-              ).getCanvas(currentMediaTime);
+              const frameResult = await reader.read(currentMediaTime);
 
               frameCount++;
 
@@ -4920,6 +4953,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
         return {
           input,
           sink,
+          reader: sequentialCanvasReader(sink),
           mediaId: clip.mediaId,
           clipId: clip.id,
           trackIndex,
@@ -5302,13 +5336,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
                   ),
                 );
                 try {
-                  const result = await (
-                    resources.sink as {
-                      getCanvas: (time: number) => Promise<{
-                        canvas: HTMLCanvasElement | OffscreenCanvas;
-                      } | null>;
-                    }
-                  ).getCanvas(sourceTime);
+                  const result = await resources.reader.read(sourceTime);
                   if (!result?.canvas) return null;
                   return result.canvas;
                 } catch (error) {
@@ -5454,6 +5482,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
           const activeClipIds = new Set(activeClips.map((c) => c.clip.id));
           for (const [clipId, resources] of playbackResourcesRef.current) {
             if (!activeClipIds.has(clipId)) {
+              resources.reader.close();
               resources.input[Symbol.dispose]?.();
               playbackResourcesRef.current.delete(clipId);
             }
@@ -5570,15 +5599,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
                 );
 
                 try {
-                  const frameResult = await (
-                    resources.sink as {
-                      getCanvas: (time: number) => Promise<{
-                        canvas: HTMLCanvasElement | OffscreenCanvas;
-                        timestamp: number;
-                        duration: number;
-                      } | null>;
-                    }
-                  ).getCanvas(sourceTime);
+                  const frameResult = await resources.reader.read(sourceTime);
 
                   if (!isActive) return null;
 
@@ -7531,9 +7552,6 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
 
-  const progressPercentage =
-    actualEndTime > 0 ? (playheadPosition / actualEndTime) * 100 : 0;
-
   const showResizeHandles = !isPlaying && selectedClip && clipBounds;
 
   const showTextClipHandles = !isPlaying && selectedTextClip && textClipBounds;
@@ -8115,12 +8133,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
           className="h-1.5 bg-bg-2 cursor-pointer group hover:h-2.5 transition-all relative"
           onClick={handleScrubClick}
         >
-          <div
-            className="h-full bg-accent relative pointer-events-none shadow-glow"
-            style={{ width: `${progressPercentage}%` }}
-          >
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity transform scale-0 group-hover:scale-100 duration-100 border border-black/20" />
-          </div>
+          <LiveProgressFill end={actualEndTime} />
         </div>
 
         {/* Controls row (docs/PROPOSAL_EDITOR_REDESIGN.md R6.2): the timecode in the
@@ -8130,7 +8143,7 @@ export const Preview: React.FC<PreviewProps> = ({ header }) => {
             picture whatever sits either side of it. */}
         <div className="h-[58px] px-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5">
         <div className="flex min-w-0 items-baseline gap-1 whitespace-nowrap font-mono text-[11px] tracking-tight tabular-nums">
-          <span className="text-accent-text">{formatTime(playheadPosition)}</span>
+          <span className="text-accent-text"><LiveTime format={formatTime} /></span>
           <span className="truncate text-fg-3">/ {formatTime(actualEndTime)}</span>
         </div>
 

@@ -97,7 +97,6 @@ export const TEXT_STYLE_PRESETS: ReadonlyArray<{
  * R4.5); the editor's sidebar shows it as the Text tab.
  */
 export const TextSection: React.FC = () => {
-  const playheadPosition = useTimelineStore((state) => state.playheadPosition);
   const { select } = useUIStore();
 
   return (
@@ -108,14 +107,14 @@ export const TextSection: React.FC = () => {
             label="Add Title"
             onClick={async () => {
               const created = await insertTimelineOverlay(
-                playheadPosition,
+                useTimelineStore.getState().playheadPosition,
                 5,
                 (trackId) =>
                   useProjectStore
                     .getState()
                     .createTextClip(
                       trackId,
-                      playheadPosition,
+                      useTimelineStore.getState().playheadPosition,
                       "New Title",
                       5,
                       DEFAULT_TITLE_STYLE,
@@ -151,14 +150,14 @@ export const TextSection: React.FC = () => {
                 label={preset.name}
                 onClick={async () => {
                   const created = await insertTimelineOverlay(
-                    playheadPosition,
+                    useTimelineStore.getState().playheadPosition,
                     5,
                     (trackId) =>
                       useProjectStore
                         .getState()
                         .createTextClip(
                           trackId,
-                          playheadPosition,
+                          useTimelineStore.getState().playheadPosition,
                           preset.text,
                           5,
                           preset.style,
