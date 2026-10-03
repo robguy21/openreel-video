@@ -128,7 +128,17 @@ export interface StudioJob {
 /** Media bookkeeping saved alongside the editor project: which studio asset each media
  *  item came from, so a fresh browser can re-download it. */
 export interface StudioMediaMap {
-  [mediaId: string]: { url: string; asset: string; name: string; type: "video" | "audio" | "image" };
+  [mediaId: string]: {
+    url: string;
+    asset: string;
+    name: string;
+    type: "video" | "audio" | "image";
+    /** One of the project's songs (the manifest's `music`), not a shot's file. */
+    song?: boolean;
+    /** A song the reader deleted from this edit's library: its tombstone, so opening the
+     *  edit does not bring it back (Import Audio Creations does). No item has this id. */
+    deleted?: boolean;
+  };
 }
 
 export interface StudioSavedDoc {

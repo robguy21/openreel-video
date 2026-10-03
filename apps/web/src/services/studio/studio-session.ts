@@ -41,7 +41,13 @@ import {
   type StudioSong,
 } from "./studio-client";
 import { planTimeline, type TimelinePlan } from "./studio-layout";
-import { assetExt, partitionSongs, songFileName, songImportMessage } from "./studio-music";
+import {
+  assetExt,
+  partitionSongs,
+  savedMediaMap,
+  songFileName,
+  songImportMessage,
+} from "./studio-music";
 
 export type StudioStatus = "idle" | "opening" | "ready" | "saving" | "exporting" | "error";
 
@@ -72,6 +78,8 @@ export interface StudioSessionState {
   /** While the studio makes that cut (it does when the part is handed over and today's is
    *  not on disk): how far it has got, or why it could not be made. */
   stitchMaking: { progress: number; message: string; failed?: string } | null;
+  /** True while the project's songs are being brought into the media library. */
+  songsBusy: boolean;
 }
 
 export const useStudioStore = create<StudioSessionState>()(() => ({
@@ -90,6 +98,7 @@ export const useStudioStore = create<StudioSessionState>()(() => ({
   error: null,
   stitchFilm: null,
   stitchMaking: null,
+  songsBusy: false,
 }));
 
 const set = useStudioStore.setState;
@@ -149,6 +158,8 @@ export function openStudioProject(pid: string, part: string | null = null): Prom
 
 async function doOpen(at: StudioRef): Promise<void> {
   stopAutosave();
+  // A song import for the edit open now must stop touching it before this one replaces it.
+  await stopSongs();
   const { pid } = at;
   set({
     pid,
@@ -191,6 +202,10 @@ async function doOpen(at: StudioRef): Promise<void> {
     set({ status: "ready", message: "", progress: 1, dirty: false });
     startAutosave();
 
+    // The project's songs, into the media library in the background: the editor does not
+    // wait for them.
+    void startSongs("open", manifest);
+
     // 4. the part as Stitch cuts it, if the studio is still making it: waited for AFTER the
     // editor is open, so an encode of minutes never holds the timeline back.
     if (prep.stitch_job) void awaitStitchFilm(at, prep.stitch_job.id);
@@ -215,6 +230,7 @@ export async function rebuildFromFilm(): Promise<void> {
   stopAutosave();
   set({ status: "opening", message: "Rebuilding from the film…", progress: 0.05, error: null });
   try {
+    await stopSongs();
     await saveChain;
     await archiveSavedEdit(at);
     const manifest = await fetchManifest(at);
@@ -222,6 +238,7 @@ export async function rebuildFromFilm(): Promise<void> {
     await buildFromManifest(manifest);
     set({ status: "ready", message: "", progress: 1, dirty: false });
     startAutosave();
+    void startSongs("open", manifest);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     set({ status: "error", error: msg, message: "" });
@@ -422,8 +439,6 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
     imported.set(i, { videoId, narrationId, soundId });
     progress(`Importing media… ${n + 1}/${indices.length}`, 0.6 + 0.3 * ((n + 1) / indices.length));
   }
-  // The project's songs: into the library, never onto the timeline.
-  await importSongs(manifest.music, media);
   set({ media });
 
   // Lay out: the shots in order on one video track, each trimmed to its cut points, and a
@@ -651,17 +666,43 @@ async function restoreSaved(saved: StudioSavedDoc, manifest: StudioManifest): Pr
     mediaLibrary: { ...project.mediaLibrary, items },
   });
   set({ media });
-
-  // Songs made since this edit was saved: into the library (never onto the timeline), and
-  // saved straight away so the edit records them and the next open does not fetch them again.
-  const songs = await importSongs(manifest.music, media);
-  if (songs.imported) {
-    set({ media: { ...media } });
-    await saveToStudio();
-  }
 }
 
 // ─── Songs (the manifest's `music`) ─────────────────────────────────────────
+//
+// Songs come into the media library AFTER the editor is open, in the background, one at a
+// time (a song is tens of megabytes; one in memory at once). Only one song run exists at a
+// time, and it is mutually exclusive with everything that replaces the project under it:
+// opening a project or part and Rebuild from the film CANCEL it and wait until it has let go
+// of the project store (`stopSongs`) before they touch anything; Send to Studio WAITS for it
+// to finish, so the export carries what it brought in. After every await the run checks that
+// it is still the run for this project and part (`still`) and abandons quietly when not, and
+// each song's mapping goes into the live store the moment it is imported - never a snapshot
+// written back at the end, which would land an old map over a newer one.
+
+const SONGS_TITLE = "Import Audio Creations";
+
+let songGen = 0;
+let songRun: Promise<void> | null = null;
+
+/** Cancel the running song import, if any, and wait until it has stopped touching the
+ *  project. What `doOpen` and `rebuildFromFilm` do before anything else. */
+async function stopSongs(): Promise<void> {
+  songGen++;
+  const run = songRun;
+  if (run) await run.catch(() => undefined);
+}
+
+/** Wait for the running song import to finish (Send to Studio). */
+async function settleSongs(): Promise<void> {
+  const run = songRun;
+  if (run) await run.catch(() => undefined);
+}
+
+/** For tests: the running song import, or a settled promise. */
+export function songsSettled(): Promise<void> {
+  return songRun ?? Promise.resolve();
+}
 
 /** The live media ids of the open edit. */
 function libraryIds(): Set<string> {
@@ -671,36 +712,6 @@ function libraryIds(): Set<string> {
 async function fetchSong(song: StudioSong): Promise<File> {
   const ext = assetExt(song.asset, "flac");
   return fetchAsFile(song.url, songFileName(song), AUDIO_TYPES[ext] || "audio/flac");
-}
-
-/**
- * Import every song in `songs` that the library does not already have (by asset path, through
- * `media`) as an audio item, recording each in `media`. Never touches the timeline. A song
- * that cannot be fetched or decoded is skipped with a warning and counted, so one bad file
- * never stops the editor opening.
- */
-async function importSongs(
-  songs: StudioSong[] | undefined,
-  media: StudioMediaMap,
-): Promise<{ imported: number; failed: number }> {
-  const { missing } = partitionSongs(songs, media, libraryIds());
-  let imported = 0;
-  let failed = 0;
-  for (let n = 0; n < missing.length; n++) {
-    const song = missing[n];
-    if (get().status === "opening") progress(`Importing songs… ${n + 1}/${missing.length}`);
-    try {
-      const file = await fetchSong(song);
-      const r = await useProjectStore.getState().importMedia(file);
-      if (!r.success || !r.actionId) throw new Error(r.error?.message ?? "could not import");
-      media[r.actionId] = { url: song.url, asset: song.asset, name: file.name, type: "audio" };
-      imported++;
-    } catch (e) {
-      console.warn("[studio] song skipped:", song.asset, e);
-      failed++;
-    }
-  }
-  return { imported, failed };
 }
 
 /** Whether a library item's file is really here: in memory and in this browser's store. */
@@ -714,65 +725,147 @@ async function hasBlob(mediaId: string): Promise<boolean> {
   }
 }
 
-let importingSongs: Promise<void> | null = null;
-
-/**
- * "Import Audio Creations": ask the studio for the project's songs now and bring into the
- * media library every one that is missing, fetching again any song the library has whose
- * file is gone (from memory or from this browser's store). Never touches the timeline and
- * never removes anything - a song deleted in the studio stays in an edit that has it.
- * Tells the reader what happened.
- */
-export function importAudioCreations(): Promise<void> {
-  if (importingSongs) return importingSongs;
-  importingSongs = doImportAudioCreations().finally(() => {
-    importingSongs = null;
-  });
-  return importingSongs;
+/** Whether this browser's media store holds the item's file (false when the write failed,
+ *  e.g. over quota: the song is in the edit all the same, from memory). */
+async function kept(mediaId: string): Promise<boolean> {
+  try {
+    return (await loadMediaBlob(mediaId)) !== null;
+  } catch {
+    return false;
+  }
 }
 
-async function doImportAudioCreations(): Promise<void> {
+/** Record one song's media id in the LIVE map, and drop any tombstone for the same song. */
+function recordSong(mediaId: string, song: StudioSong, name: string) {
+  set((s) => {
+    const media: StudioMediaMap = {};
+    for (const [id, m] of Object.entries(s.media)) {
+      if (m.asset === song.asset && (m.deleted || m.song) && id !== mediaId) continue;
+      media[id] = m;
+    }
+    media[mediaId] = { url: song.url, asset: song.asset, name, type: "audio", song: true };
+    return { media };
+  });
+}
+
+function startSongs(mode: "open" | "menu", manifest?: StudioManifest): Promise<void> {
   const at = ref();
-  if (!at || (get().status !== "ready" && get().status !== "saving")) return;
-  const title = "Import Audio Creations";
+  if (!at) return Promise.resolve();
+  const gen = ++songGen;
+  const run: Promise<void> = doSongs(mode, at, gen, manifest).finally(() => {
+    if (songRun === run) {
+      songRun = null;
+      set({ songsBusy: false });
+    }
+  });
+  songRun = run;
+  set({ songsBusy: true });
+  return run;
+}
+
+/**
+ * One song run. `open` (after the editor opens or is rebuilt): import every song the edit
+ * has never had, and say nothing when there is none. `menu` (Import Audio Creations): ask
+ * the studio again, fetch again any song the library has whose file is gone, bring back
+ * songs the reader deleted, import the missing ones, and always say what happened. Never
+ * the timeline, never a removal. A song that cannot be fetched or imported is skipped with
+ * a warning and counted.
+ */
+async function doSongs(
+  mode: "open" | "menu",
+  at: StudioRef,
+  gen: number,
+  given?: StudioManifest,
+): Promise<void> {
+  const still = () => gen === songGen && get().pid === at.pid && get().part === at.part;
+  const n = (k: number) => `${k} song${k === 1 ? "" : "s"}`;
   try {
-    const manifest = await fetchManifest(at);
-    if (get().pid !== at.pid || get().part !== at.part) return;
-    const media: StudioMediaMap = { ...get().media };
-    const { present } = partitionSongs(manifest.music, media, libraryIds());
-    let refetched = 0;
-    let failed = 0;
-    for (const { song, mediaId } of present) {
-      if (await hasBlob(mediaId)) continue;
-      try {
-        const file = await fetchSong(song);
-        const store = useProjectStore.getState();
-        const r = await store.replaceMediaAsset(mediaId, file);
-        if (!r.success) throw new Error(r.error?.message ?? "could not import");
-        const item = useProjectStore.getState().getMediaItem(mediaId);
-        await saveMediaBlob(store.project.id, mediaId, file, item!.metadata);
-        media[mediaId] = { ...media[mediaId], url: song.url };
-        refetched++;
-      } catch (e) {
-        console.warn("[studio] song not fetched again:", song.asset, e);
-        failed++;
+    const manifest = given ?? (await fetchManifest(at));
+    if (!still()) return;
+    const { present, missing, deleted } = partitionSongs(manifest.music, get().media, libraryIds());
+    const lost: { song: StudioSong; mediaId: string }[] = [];
+    if (mode === "menu") {
+      for (const p of present) {
+        if (!(await hasBlob(p.mediaId))) lost.push(p);
+        if (!still()) return;
       }
     }
-    const added = await importSongs(manifest.music, media);
-    set({ media });
-    if (added.imported || refetched) await saveToStudio();
-    const result = {
-      total: partitionSongs(manifest.music, {}, new Set()).missing.length,
-      imported: added.imported,
-      refetched,
-      failed: failed + added.failed,
-    };
-    const message = songImportMessage(result);
-    if (result.failed) toast.warning(title, message);
-    else toast.success(title, message);
+    const toImport = mode === "menu" ? [...missing, ...deleted] : missing;
+    const total = partitionSongs(manifest.music, {}, new Set()).missing.length;
+    const work = lost.length + toImport.length;
+    if (mode === "open" && !work) return;
+    if (work) toast.info(SONGS_TITLE, `Bringing in ${n(work)}…`);
+
+    let imported = 0;
+    let refetched = 0;
+    let failed = 0;
+    let notKept = 0;
+    for (const { song, mediaId } of lost) {
+      try {
+        const file = await fetchSong(song);
+        if (!still()) return;
+        const r = await useProjectStore.getState().replaceMediaAsset(mediaId, file);
+        if (!r.success) throw new Error(r.error?.message ?? "could not import");
+        const item = useProjectStore.getState().getMediaItem(mediaId);
+        try {
+          await saveMediaBlob(useProjectStore.getState().project.id, mediaId, file, item!.metadata);
+        } catch {
+          notKept++;
+        }
+        recordSong(mediaId, song, file.name);
+        refetched++;
+      } catch (e) {
+        console.warn("[studio] song not brought in again:", song.asset, e);
+        failed++;
+      }
+      if (!still()) return;
+    }
+    for (const song of toImport) {
+      try {
+        const file = await fetchSong(song);
+        if (!still()) return;
+        const r = await useProjectStore.getState().importMedia(file);
+        if (!r.success || !r.actionId) throw new Error(r.error?.message ?? "could not import");
+        recordSong(r.actionId, song, file.name);
+        imported++;
+        if (!(await kept(r.actionId))) notKept++;
+      } catch (e) {
+        console.warn("[studio] song skipped:", song.asset, e);
+        failed++;
+      }
+      if (!still()) return;
+    }
+    if (imported || refetched) await saveToStudio();
+    if (!still()) return;
+    const message = songImportMessage({ total, imported, refetched, failed, notKept });
+    if (failed || notKept) toast.warning(SONGS_TITLE, message);
+    else toast.success(SONGS_TITLE, message);
   } catch (e) {
-    toast.error(title, e instanceof Error ? e.message : String(e));
+    if (!still()) return;
+    console.warn("[studio] songs:", e);
+    toast.error(SONGS_TITLE, e instanceof Error ? e.message : String(e));
   }
+}
+
+/**
+ * "Import Audio Creations" (the More menu): ask the studio for the project's songs now and
+ * bring every one into the media library - see `doSongs`. A second click while songs are
+ * still coming in says so rather than starting again; while the editor is opening,
+ * rebuilding or exporting it says it is busy.
+ */
+export function importAudioCreations(): Promise<void> {
+  if (!ref()) return Promise.resolve();
+  if (songRun) {
+    toast.info(SONGS_TITLE, "Songs are already being brought in.");
+    return songRun;
+  }
+  const status = get().status;
+  if (status !== "ready" && status !== "saving") {
+    toast.info(SONGS_TITLE, "The editor is busy - try again in a moment.");
+    return Promise.resolve();
+  }
+  toast.info(SONGS_TITLE, "Looking for songs in the studio…");
+  return startSongs("menu");
 }
 
 // ─── Saving ─────────────────────────────────────────────────────────────────
@@ -819,10 +912,9 @@ function buildSavedDoc(): StudioSavedDoc {
   const serializer = createProjectSerializer(createStorageEngine());
   const parsed = JSON.parse(serializer.exportToJsonWithMetadata(full, "Clip Studio edit")) as StudioSavedDoc;
   const { pid, part, media } = get();
-  // Only keep mappings for media that still exists in the library.
-  const live = new Set(full.mediaLibrary.items.map((m) => m.id));
-  const kept: StudioMediaMap = {};
-  for (const [id, m] of Object.entries(media)) if (live.has(id)) kept[id] = m;
+  // Only keep mappings for media that still exists in the library - and a tombstone for a
+  // song the reader deleted, so reopening the edit does not bring it back.
+  const kept = savedMediaMap(media, new Set(full.mediaLibrary.items.map((m) => m.id)));
   parsed.studio = { pid: pid!, media: kept, savedAt: Date.now(), app: "openreel" };
   if (part) parsed.studio.part = part;
   return parsed;
@@ -911,6 +1003,11 @@ export async function exportToStudio(
 ): Promise<void> {
   const at = ref();
   if (!at || get().status === "exporting") return;
+  if (songRun) {
+    // Songs still coming in: the export carries the library as it is once they are in.
+    set({ status: "exporting", progress: 0, message: "Waiting for songs…", error: null });
+    await settleSongs();
+  }
   const project: Project = useProjectStore.getState().getFullProject();
   const settings: Partial<VideoExportSettings> = {
     width: project.settings.width,
