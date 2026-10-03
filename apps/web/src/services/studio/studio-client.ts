@@ -104,7 +104,17 @@ export interface StudioManifest {
   editor_export: StudioMediaRef | null;
   editor_saved: boolean;
   editor_ts: number | null;
+  /** Every song the project has, the same for every part (songs whose file is gone are
+   *  left out). Published to the media library, never laid on the timeline. Absent from a
+   *  studio before songs. */
+  music?: StudioSong[];
   generated: number;
+}
+
+/** A song the studio made (`music` in the manifest): `asset` is its identity. */
+export interface StudioSong extends StudioMediaRef {
+  id: string;
+  name: string;
 }
 
 export interface StudioJob {

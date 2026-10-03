@@ -38,8 +38,10 @@ import {
   type StudioRef,
   type StudioSavedDoc,
   type StudioShot,
+  type StudioSong,
 } from "./studio-client";
 import { planTimeline, type TimelinePlan } from "./studio-layout";
+import { assetExt, partitionSongs, songFileName, songImportMessage } from "./studio-music";
 
 export type StudioStatus = "idle" | "opening" | "ready" | "saving" | "exporting" | "error";
 
@@ -310,12 +312,6 @@ export function shotFileName(
   return `${shotPrefix(shot)}${suffix} ${slug}.${ext}`;
 }
 
-/** The extension of a studio asset's path, for the name it gets in the media library. */
-function extOf(asset: string, fallback: string): string {
-  const m = /\.([A-Za-z0-9]+)$/.exec(asset);
-  return m ? m[1].toLowerCase() : fallback;
-}
-
 const AUDIO_TYPES: Record<string, string> = {
   flac: "audio/flac",
   wav: "audio/wav",
@@ -371,7 +367,7 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
     // item serves the seam sound under the next shot.
     let sound: File | null = null;
     if (s.audio?.url) {
-      const ext = extOf(s.audio.asset, "flac");
+      const ext = assetExt(s.audio.asset, "flac");
       sound = await fetchAsFile(s.audio.url, shotFileName(s, " sound", ext), AUDIO_TYPES[ext] || "audio/flac");
     }
     files.set(i, { video, narration, sound });
@@ -426,6 +422,8 @@ async function buildFromManifest(manifest: StudioManifest): Promise<void> {
     imported.set(i, { videoId, narrationId, soundId });
     progress(`Importing media… ${n + 1}/${indices.length}`, 0.6 + 0.3 * ((n + 1) / indices.length));
   }
+  // The project's songs: into the library, never onto the timeline.
+  await importSongs(manifest.music, media);
   set({ media });
 
   // Lay out: the shots in order on one video track, each trimmed to its cut points, and a
@@ -653,6 +651,128 @@ async function restoreSaved(saved: StudioSavedDoc, manifest: StudioManifest): Pr
     mediaLibrary: { ...project.mediaLibrary, items },
   });
   set({ media });
+
+  // Songs made since this edit was saved: into the library (never onto the timeline), and
+  // saved straight away so the edit records them and the next open does not fetch them again.
+  const songs = await importSongs(manifest.music, media);
+  if (songs.imported) {
+    set({ media: { ...media } });
+    await saveToStudio();
+  }
+}
+
+// ─── Songs (the manifest's `music`) ─────────────────────────────────────────
+
+/** The live media ids of the open edit. */
+function libraryIds(): Set<string> {
+  return new Set(useProjectStore.getState().project.mediaLibrary.items.map((m) => m.id));
+}
+
+async function fetchSong(song: StudioSong): Promise<File> {
+  const ext = assetExt(song.asset, "flac");
+  return fetchAsFile(song.url, songFileName(song), AUDIO_TYPES[ext] || "audio/flac");
+}
+
+/**
+ * Import every song in `songs` that the library does not already have (by asset path, through
+ * `media`) as an audio item, recording each in `media`. Never touches the timeline. A song
+ * that cannot be fetched or decoded is skipped with a warning and counted, so one bad file
+ * never stops the editor opening.
+ */
+async function importSongs(
+  songs: StudioSong[] | undefined,
+  media: StudioMediaMap,
+): Promise<{ imported: number; failed: number }> {
+  const { missing } = partitionSongs(songs, media, libraryIds());
+  let imported = 0;
+  let failed = 0;
+  for (let n = 0; n < missing.length; n++) {
+    const song = missing[n];
+    if (get().status === "opening") progress(`Importing songs… ${n + 1}/${missing.length}`);
+    try {
+      const file = await fetchSong(song);
+      const r = await useProjectStore.getState().importMedia(file);
+      if (!r.success || !r.actionId) throw new Error(r.error?.message ?? "could not import");
+      media[r.actionId] = { url: song.url, asset: song.asset, name: file.name, type: "audio" };
+      imported++;
+    } catch (e) {
+      console.warn("[studio] song skipped:", song.asset, e);
+      failed++;
+    }
+  }
+  return { imported, failed };
+}
+
+/** Whether a library item's file is really here: in memory and in this browser's store. */
+async function hasBlob(mediaId: string): Promise<boolean> {
+  const item = useProjectStore.getState().getMediaItem(mediaId);
+  if (!item || item.isPlaceholder || !(item.blob instanceof Blob)) return false;
+  try {
+    return (await loadMediaBlob(mediaId)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+let importingSongs: Promise<void> | null = null;
+
+/**
+ * "Import Audio Creations": ask the studio for the project's songs now and bring into the
+ * media library every one that is missing, fetching again any song the library has whose
+ * file is gone (from memory or from this browser's store). Never touches the timeline and
+ * never removes anything - a song deleted in the studio stays in an edit that has it.
+ * Tells the reader what happened.
+ */
+export function importAudioCreations(): Promise<void> {
+  if (importingSongs) return importingSongs;
+  importingSongs = doImportAudioCreations().finally(() => {
+    importingSongs = null;
+  });
+  return importingSongs;
+}
+
+async function doImportAudioCreations(): Promise<void> {
+  const at = ref();
+  if (!at || (get().status !== "ready" && get().status !== "saving")) return;
+  const title = "Import Audio Creations";
+  try {
+    const manifest = await fetchManifest(at);
+    if (get().pid !== at.pid || get().part !== at.part) return;
+    const media: StudioMediaMap = { ...get().media };
+    const { present } = partitionSongs(manifest.music, media, libraryIds());
+    let refetched = 0;
+    let failed = 0;
+    for (const { song, mediaId } of present) {
+      if (await hasBlob(mediaId)) continue;
+      try {
+        const file = await fetchSong(song);
+        const store = useProjectStore.getState();
+        const r = await store.replaceMediaAsset(mediaId, file);
+        if (!r.success) throw new Error(r.error?.message ?? "could not import");
+        const item = useProjectStore.getState().getMediaItem(mediaId);
+        await saveMediaBlob(store.project.id, mediaId, file, item!.metadata);
+        media[mediaId] = { ...media[mediaId], url: song.url };
+        refetched++;
+      } catch (e) {
+        console.warn("[studio] song not fetched again:", song.asset, e);
+        failed++;
+      }
+    }
+    const added = await importSongs(manifest.music, media);
+    set({ media });
+    if (added.imported || refetched) await saveToStudio();
+    const result = {
+      total: partitionSongs(manifest.music, {}, new Set()).missing.length,
+      imported: added.imported,
+      refetched,
+      failed: failed + added.failed,
+    };
+    const message = songImportMessage(result);
+    if (result.failed) toast.warning(title, message);
+    else toast.success(title, message);
+  } catch (e) {
+    toast.error(title, e instanceof Error ? e.message : String(e));
+  }
 }
 
 // ─── Saving ─────────────────────────────────────────────────────────────────
