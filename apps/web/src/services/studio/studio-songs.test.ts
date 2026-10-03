@@ -66,7 +66,8 @@ function deferred() {
 /** What the studio serves, per part. */
 let manifests: Record<string, Partial<StudioManifest>> = {};
 let docs: Record<string, StudioSavedDoc | null> = {};
-let puts: { part: string; doc: StudioSavedDoc }[] = [];
+let puts: { part: string; doc: StudioSavedDoc; status: string }[] = [];
+let manifestGets = 0;
 let fetched: string[] = [];
 /** Held song fetches / imports, by file name. */
 let holdFetch: Partial<Record<string, Promise<void>>> = {};
@@ -144,6 +145,7 @@ beforeEach(() => {
   manifests = {};
   docs = {};
   puts = [];
+  manifestGets = 0;
   fetched = [];
   holdFetch = {};
   holdImport = {};
@@ -166,16 +168,19 @@ beforeEach(() => {
   URL.revokeObjectURL = vi.fn();
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+    vi.fn(async (url: string, init?: { method?: string; body?: string; signal?: AbortSignal }) => {
       const method = init?.method ?? "GET";
       if (url.includes("editor/prepare")) return new Response(JSON.stringify({ queued: false, missing: 0 }));
       if (url.includes("editor/refresh_sources")) {
         docs[partOf(url)] = null;
         return new Response("{}");
       }
-      if (url.includes("editor/manifest")) return new Response(JSON.stringify(manifestFor(partOf(url))));
+      if (url.includes("editor/manifest")) {
+        manifestGets++;
+        return new Response(JSON.stringify(manifestFor(partOf(url))));
+      }
       if (url.includes("editor/doc") && method === "PUT") {
-        puts.push({ part: partOf(url), doc: JSON.parse(init!.body!) });
+        puts.push({ part: partOf(url), doc: JSON.parse(init!.body!), status: useStudioStore.getState().status });
         return new Response(JSON.stringify({ ts: 1 }));
       }
       if (url.includes("editor/doc")) {
@@ -186,7 +191,16 @@ beforeEach(() => {
       const s = all.find((x) => x.url === url);
       if (s) {
         fetched.push(s.asset);
-        if (holdFetch[s.name]) await holdFetch[s.name];
+        const hold = holdFetch[s.name];
+        if (hold) {
+          // A held download ends when released - or when the caller aborts it.
+          await Promise.race([
+            hold,
+            new Promise((_, reject) =>
+              init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+            ),
+          ]);
+        }
         if (s.name === "Gone") return new Response("no", { status: 500 });
         return new Response(new Blob(["fLaC"], { type: "audio/flac" }));
       }
@@ -470,5 +484,79 @@ describe("exclusion", () => {
     expect(lib.every((m) => media[m.id])).toBe(true);
     expect(clipMediaIds().every((id) => !media[id].song)).toBe(true);
     expect(importMedia.mock.calls.filter(([f]) => f.name === "Song 2.flac").length).toBe(1);
+  });
+});
+
+describe("leaving a part", () => {
+  it("saves the old part's unsaved edit first, with the editor already closed to edits", async () => {
+    manifests.A = {};
+    manifests.B = {};
+    docs.A = savedDoc("A");
+    docs.B = savedDoc("B");
+    await open("A");
+    await useProjectStore.getState().addTrack("audio", undefined, { name: "Unsaved" });
+    expect(useStudioStore.getState().dirty).toBe(true);
+    await open("B");
+    const saveA = puts.find((p) => p.part === "A");
+    expect(saveA?.status).toBe("opening");
+    expect(saveA?.doc.project).toBeTruthy();
+    expect(JSON.stringify(saveA?.doc)).toContain("Unsaved");
+  });
+
+  it("aborts a song download in flight instead of waiting for it", async () => {
+    manifests.A = { music: [song(1)] };
+    manifests.B = {};
+    docs.A = savedDoc("A");
+    docs.B = savedDoc("B");
+    holdFetch["Song 1"] = new Promise<void>(() => {}); // a download that would never finish
+    await openStudioProject("p1", "A");
+    await vi.waitFor(() => expect(fetched).toEqual([song(1).asset]));
+    await open("B"); // returns only because the download was aborted
+    expect(useStudioStore.getState().part).toBe("B");
+    expect(importMedia).not.toHaveBeenCalled();
+    expect(toasts().some((t) => t.type === "warning" || t.type === "error")).toBe(false);
+  });
+});
+
+describe("Import Audio Creations during the open-time import", () => {
+  it("runs the whole look once the songs coming in now are in - once, however often asked", async () => {
+    // Song 1 is in the edit but its file is gone from this browser; Song 2 is new.
+    manifests.A = { music: [song(1), song(2)] };
+    docs.A = savedDoc("A", [audioItem("old1", "Song 1.flac", null)], {
+      old1: { url: song(1).url, asset: song(1).asset, name: "Song 1.flac", type: "audio", song: true },
+    });
+    const gate = deferred();
+    holdFetch["Song 2"] = gate.promise;
+    await openStudioProject("p1", "A");
+    await vi.waitFor(() => expect(fetched).toContain(song(2).asset));
+    stored.delete("old1"); // this browser has lost Song 1's file since it was restored
+    void importAudioCreations();
+    void importAudioCreations();
+    const queued = toasts().filter((t) => t.message === "Will look again once the songs coming in now are in.");
+    expect(queued.length).toBe(2);
+    expect(replaceMediaAsset).not.toHaveBeenCalled(); // the open-time run never re-fetches
+    delete holdFetch["Song 2"];
+    gate.release();
+    await songsSettled(); // the open-time run
+    await songsSettled(); // the queued menu run
+    expect(manifestGets).toBe(2); // the open's own, and ONE menu run
+    expect(replaceMediaAsset).toHaveBeenCalledWith("old1", expect.any(File));
+    const messages = toasts().map((t) => t.message);
+    expect(messages).toContain("Looking for songs in the studio…");
+    expect(messages.at(-1)).toBe("1 song fetched again.");
+  });
+
+  it("drops the queued look when another part is opened", async () => {
+    manifests.A = { music: [song(1)] };
+    manifests.B = {};
+    docs.A = savedDoc("A");
+    docs.B = savedDoc("B");
+    holdFetch["Song 1"] = new Promise<void>(() => {});
+    await openStudioProject("p1", "A");
+    await vi.waitFor(() => expect(fetched).toEqual([song(1).asset]));
+    void importAudioCreations();
+    await open("B");
+    await songsSettled();
+    expect(toasts().map((t) => t.message)).not.toContain("Looking for songs in the studio…");
   });
 });

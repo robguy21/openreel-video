@@ -157,8 +157,13 @@ export function openStudioProject(pid: string, part: string | null = null): Prom
 }
 
 async function doOpen(at: StudioRef): Promise<void> {
+  // The edit open now (if any) stops being editable and its unsaved changes are saved
+  // BEFORE anything waits on it; then its song import is stopped (its download aborted)
+  // and has let go of the project store before this one replaces it.
+  const unsaved = get().pid !== null && (get().dirty || saveTimer !== null);
   stopAutosave();
-  // A song import for the edit open now must stop touching it before this one replaces it.
+  if (get().pid !== null) set({ status: "opening", message: "Contacting Clip Studio…" });
+  if (unsaved) await saveToStudio();
   await stopSongs();
   const { pid } = at;
   set({
@@ -284,8 +289,8 @@ async function awaitStitchFilm(at: StudioRef, jobId: string): Promise<void> {
 }
 
 /** Fetch a studio asset as a File the media importer accepts. */
-async function fetchAsFile(url: string, name: string, type: string): Promise<File> {
-  const blob = await fetchMediaBlob(url);
+async function fetchAsFile(url: string, name: string, type: string, signal?: AbortSignal): Promise<File> {
+  const blob = await fetchMediaBlob(url, signal);
   return new File([blob], name, { type });
 }
 
@@ -684,11 +689,20 @@ const SONGS_TITLE = "Import Audio Creations";
 
 let songGen = 0;
 let songRun: Promise<void> | null = null;
+/** Which kind of run `songRun` is. */
+let songRunMode: "open" | "menu" | null = null;
+/** The download the running import is waiting on, aborted by `stopSongs`. */
+let songAbort: AbortController | null = null;
+/** Import Audio Creations asked for while the open-time run was going: started when it ends. */
+let menuQueued = false;
 
-/** Cancel the running song import, if any, and wait until it has stopped touching the
- *  project. What `doOpen` and `rebuildFromFilm` do before anything else. */
+/** Cancel the running song import, if any - aborting the download it is waiting on - and
+ *  wait until it has stopped touching the project. A queued menu run is dropped. What
+ *  `doOpen` and `rebuildFromFilm` do before anything else. */
 async function stopSongs(): Promise<void> {
   songGen++;
+  menuQueued = false;
+  songAbort?.abort();
   const run = songRun;
   if (run) await run.catch(() => undefined);
 }
@@ -709,9 +723,9 @@ function libraryIds(): Set<string> {
   return new Set(useProjectStore.getState().project.mediaLibrary.items.map((m) => m.id));
 }
 
-async function fetchSong(song: StudioSong): Promise<File> {
+async function fetchSong(song: StudioSong, signal?: AbortSignal): Promise<File> {
   const ext = assetExt(song.asset, "flac");
-  return fetchAsFile(song.url, songFileName(song), AUDIO_TYPES[ext] || "audio/flac");
+  return fetchAsFile(song.url, songFileName(song), AUDIO_TYPES[ext] || "audio/flac", signal);
 }
 
 /** Whether a library item's file is really here: in memory and in this browser's store. */
@@ -752,13 +766,23 @@ function startSongs(mode: "open" | "menu", manifest?: StudioManifest): Promise<v
   const at = ref();
   if (!at) return Promise.resolve();
   const gen = ++songGen;
-  const run: Promise<void> = doSongs(mode, at, gen, manifest).finally(() => {
-    if (songRun === run) {
-      songRun = null;
-      set({ songsBusy: false });
+  const abort = new AbortController();
+  const run: Promise<void> = doSongs(mode, at, gen, manifest, abort.signal).finally(() => {
+    if (songRun !== run) return;
+    songRun = null;
+    songRunMode = null;
+    songAbort = null;
+    set({ songsBusy: false });
+    // A menu click that arrived during the open-time run: its turn now, unless the run was
+    // stopped (another part opened, a rebuild) - `stopSongs` dropped it then.
+    if (menuQueued) {
+      menuQueued = false;
+      if (gen === songGen && ref()) startMenuRun();
     }
   });
   songRun = run;
+  songRunMode = mode;
+  songAbort = abort;
   set({ songsBusy: true });
   return run;
 }
@@ -776,6 +800,7 @@ async function doSongs(
   at: StudioRef,
   gen: number,
   given?: StudioManifest,
+  signal?: AbortSignal,
 ): Promise<void> {
   const still = () => gen === songGen && get().pid === at.pid && get().part === at.part;
   const n = (k: number) => `${k} song${k === 1 ? "" : "s"}`;
@@ -802,7 +827,7 @@ async function doSongs(
     let notKept = 0;
     for (const { song, mediaId } of lost) {
       try {
-        const file = await fetchSong(song);
+        const file = await fetchSong(song, signal);
         if (!still()) return;
         const r = await useProjectStore.getState().replaceMediaAsset(mediaId, file);
         if (!r.success) throw new Error(r.error?.message ?? "could not import");
@@ -815,6 +840,7 @@ async function doSongs(
         recordSong(mediaId, song, file.name);
         refetched++;
       } catch (e) {
+        if (!still()) return;
         console.warn("[studio] song not brought in again:", song.asset, e);
         failed++;
       }
@@ -822,7 +848,7 @@ async function doSongs(
     }
     for (const song of toImport) {
       try {
-        const file = await fetchSong(song);
+        const file = await fetchSong(song, signal);
         if (!still()) return;
         const r = await useProjectStore.getState().importMedia(file);
         if (!r.success || !r.actionId) throw new Error(r.error?.message ?? "could not import");
@@ -830,6 +856,7 @@ async function doSongs(
         imported++;
         if (!(await kept(r.actionId))) notKept++;
       } catch (e) {
+        if (!still()) return;
         console.warn("[studio] song skipped:", song.asset, e);
         failed++;
       }
@@ -856,7 +883,14 @@ async function doSongs(
 export function importAudioCreations(): Promise<void> {
   if (!ref()) return Promise.resolve();
   if (songRun) {
-    toast.info(SONGS_TITLE, "Songs are already being brought in.");
+    if (songRunMode === "menu") {
+      toast.info(SONGS_TITLE, "Songs are already being brought in.");
+      return songRun;
+    }
+    // The open-time run brings in new songs only; the reader asked for the whole look
+    // (lost files, deleted songs), so it runs next. One queued run at most.
+    menuQueued = true;
+    toast.info(SONGS_TITLE, "Will look again once the songs coming in now are in.");
     return songRun;
   }
   const status = get().status;
@@ -864,6 +898,10 @@ export function importAudioCreations(): Promise<void> {
     toast.info(SONGS_TITLE, "The editor is busy - try again in a moment.");
     return Promise.resolve();
   }
+  return startMenuRun();
+}
+
+function startMenuRun(): Promise<void> {
   toast.info(SONGS_TITLE, "Looking for songs in the studio…");
   return startSongs("menu");
 }

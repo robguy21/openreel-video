@@ -267,8 +267,8 @@ export async function putSavedDoc(ref: StudioRef, doc: StudioSavedDoc): Promise<
   return json(await fetch(...putSavedDocRequest(ref, doc)));
 }
 
-export async function fetchMediaBlob(url: string): Promise<Blob> {
-  const res = await fetch(url, { cache: "force-cache", credentials: CREDENTIALS });
+export async function fetchMediaBlob(url: string, signal?: AbortSignal): Promise<Blob> {
+  const res = await fetch(url, { cache: "force-cache", credentials: CREDENTIALS, signal });
   if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
   return res.blob();
 }
