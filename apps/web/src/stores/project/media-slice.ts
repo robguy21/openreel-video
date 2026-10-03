@@ -17,9 +17,23 @@ export type MediaSlice = Pick<
   | "getMediaItem"
 >;
 
+/** An import whose project was replaced while its file was being read. */
+function projectChanged() {
+  return {
+    success: false as const,
+    error: {
+      code: "INVALID_PARAMS" as const,
+      message: "The project changed while this was being imported.",
+    },
+  };
+}
+
 export function createMediaSlice(set: Set, get: Get): MediaSlice {
   return {
     importMedia: async (file: File) => {
+      // The project this import is FOR: if another one is open by the time the file is read,
+      // the item is not added to it.
+      const forProject = get().project.id;
       try {
         const mediaBridge = getMediaBridge();
         if (!mediaBridge.isInitialized()) {
@@ -139,6 +153,7 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
         // The project as it is NOW, not as it was before the decode above: anything that
         // changed while the file was being read (an edit, another import) is kept.
         const project = get().project;
+        if (project.id !== forProject) return projectChanged();
         const updatedProject = {
           ...project,
           mediaLibrary: {
@@ -237,6 +252,7 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
       file: File,
       sourceFolder?: string,
     ) => {
+      const forProject = get().project.id;
       try {
         const mediaBridge = getMediaBridge();
         if (!mediaBridge.isInitialized()) {
@@ -351,6 +367,7 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
 
         // As in importMedia: the project as it is now, after the decode.
         const project = get().project;
+        if (project.id !== forProject) return projectChanged();
         const updatedItems = project.mediaLibrary.items.map((item) =>
           item.id === mediaId ? updatedItem : item,
         );
