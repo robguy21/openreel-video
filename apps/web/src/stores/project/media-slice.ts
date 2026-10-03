@@ -20,8 +20,6 @@ export type MediaSlice = Pick<
 export function createMediaSlice(set: Set, get: Get): MediaSlice {
   return {
     importMedia: async (file: File) => {
-      const { project } = get();
-
       try {
         const mediaBridge = getMediaBridge();
         if (!mediaBridge.isInitialized()) {
@@ -138,6 +136,9 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
           },
         };
 
+        // The project as it is NOW, not as it was before the decode above: anything that
+        // changed while the file was being read (an edit, another import) is kept.
+        const project = get().project;
         const updatedProject = {
           ...project,
           mediaLibrary: {
@@ -236,8 +237,6 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
       file: File,
       sourceFolder?: string,
     ) => {
-      const { project } = get();
-
       try {
         const mediaBridge = getMediaBridge();
         if (!mediaBridge.isInitialized()) {
@@ -350,6 +349,8 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
           },
         };
 
+        // As in importMedia: the project as it is now, after the decode.
+        const project = get().project;
         const updatedItems = project.mediaLibrary.items.map((item) =>
           item.id === mediaId ? updatedItem : item,
         );
