@@ -8,6 +8,7 @@ import {
   FileCode,
   Keyboard,
   RotateCcw,
+  Music,
 } from "@/icons/lucide-compat";
 import { useUIStore } from "../../../stores/ui-store";
 import { useSettingsStore } from "../../../stores/settings-store";
@@ -20,7 +21,11 @@ import {
 } from "../tour";
 import { RailButton, RailMenu } from "./RailItem";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { rebuildFromFilm, useStudioStore } from "../../../services/studio/studio-session";
+import {
+  importAudioCreations,
+  rebuildFromFilm,
+  useStudioStore,
+} from "../../../services/studio/studio-session";
 
 /**
  * The "..." menu at the foot of the rail: everything rare (docs/PROPOSAL_EDITOR_REDESIGN.md
@@ -65,6 +70,12 @@ export const EditorMoreMenu: React.FC<{ onShowShortcuts: () => void }> = ({
                 description: "Lay the part out fresh from the studio",
                 icon: <RotateCcw size={16} aria-hidden />,
                 onSelect: () => setConfirmRebuild(true),
+              },
+              {
+                label: "Import Audio Creations",
+                description: "Bring the project's songs into the media library",
+                icon: <Music size={16} aria-hidden />,
+                onSelect: () => void importAudioCreations(),
               },
               null,
             ]
