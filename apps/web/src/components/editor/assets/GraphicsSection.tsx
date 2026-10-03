@@ -23,7 +23,6 @@ import { PanelButton } from "./shared";
  * R4.5); the editor's sidebar shows it as the Graphics tab.
  */
 export const GraphicsSection: React.FC = () => {
-  const playheadPosition = useTimelineStore((state) => state.playheadPosition);
   const { select } = useUIStore();
   const { project, importMedia } = useProjectStore();
   const [generatingBackground, setGeneratingBackground] = useState<
@@ -154,14 +153,14 @@ export const GraphicsSection: React.FC = () => {
                   label={shape.label}
                   onClick={async () => {
                     const created = await insertTimelineOverlay(
-                      playheadPosition,
+                      useTimelineStore.getState().playheadPosition,
                       5,
                       (trackId) =>
                         useProjectStore
                           .getState()
                           .createShapeClip(
                             trackId,
-                            playheadPosition,
+                            useTimelineStore.getState().playheadPosition,
                             shape.type,
                           ),
                     );
@@ -205,14 +204,14 @@ export const GraphicsSection: React.FC = () => {
                   label={mesh.label}
                   onClick={async () => {
                     const created = await insertTimelineOverlay(
-                      playheadPosition,
+                      useTimelineStore.getState().playheadPosition,
                       5,
                       (trackId) =>
                         useProjectStore
                           .getState()
                           .createShapeClip(
                             trackId,
-                            playheadPosition,
+                            useTimelineStore.getState().playheadPosition,
                             mesh.type,
                           ),
                     );
@@ -258,12 +257,12 @@ export const GraphicsSection: React.FC = () => {
                   if (file) {
                     const content = await file.text();
                     const created = await insertTimelineOverlay(
-                      playheadPosition,
+                      useTimelineStore.getState().playheadPosition,
                       5,
                       (trackId) =>
                         useProjectStore
                           .getState()
-                          .importSVG(content, trackId, playheadPosition),
+                          .importSVG(content, trackId, useTimelineStore.getState().playheadPosition),
                     );
                     if (created) {
                       select({

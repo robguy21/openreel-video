@@ -102,8 +102,7 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
   onSelectTransition,
   selectedTransitionId = null,
 }) => {
-  const { isTrackExpanded, playheadPosition } = useTimelineStore();
-  const isExpanded = isTrackExpanded(track.id);
+  const isExpanded = useTimelineStore((s) => s.isTrackExpanded(track.id));
   const { snapSettings } = useUIStore();
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropHint, setDropHint] = useState("Drop to add clip");
@@ -200,7 +199,7 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
           rawTime,
           "",
           allTracks,
-          playheadPosition,
+          useTimelineStore.getState().playheadPosition,
           snapSettings,
           pixelsPerSecond,
         );
@@ -249,7 +248,7 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
             rawTime,
             "",
             allTracks,
-            playheadPosition,
+            useTimelineStore.getState().playheadPosition,
             snapSettings,
             pixelsPerSecond,
           );
@@ -273,7 +272,7 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
             rawTime,
             "",
             allTracks,
-            playheadPosition,
+            useTimelineStore.getState().playheadPosition,
             snapSettings,
             pixelsPerSecond,
           );
@@ -287,7 +286,6 @@ export const TrackLane: React.FC<TrackLaneProps> = ({
       allTracks,
       onDropMedia,
       pixelsPerSecond,
-      playheadPosition,
       scrollX,
       snapSettings,
       track.id,

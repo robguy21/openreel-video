@@ -44,7 +44,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
     groupTracks,
     project,
   } = useProjectStore();
-  const { getTrackHeight } = useTimelineStore();
+  const trackHeight = useTimelineStore((s) => s.getTrackHeight(track.id, track.type));
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(track.name);
@@ -157,7 +157,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
         onDragOver={onDragOver}
         onDrop={(e) => onDrop(e, track.id)}
         onDragEnd={onDragEnd}
-        style={{ height: getTrackHeight(track.id, track.type) }}
+        style={{ height: trackHeight }}
         className={`border-b border-border flex items-center gap-2.5 px-4 relative group transition-colors cursor-grab active:cursor-grabbing ${
           track.hidden || effectivelyMuted ? "opacity-60" : ""
         } ${

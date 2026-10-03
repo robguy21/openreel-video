@@ -70,7 +70,6 @@ const StickerCard: React.FC<StickerCardProps> = ({ sticker, onAdd }) => (
 export const StickerPickerPanel: React.FC = () => {
   const project = useProjectStore((state) => state.project);
   const createStickerClip = useProjectStore((state) => state.createStickerClip);
-  const playheadPosition = useTimelineStore((state) => state.playheadPosition);
   const select = useUIStore((state) => state.select);
 
   const [activeTab, setActiveTab] = useState<TabType>("emojis");
@@ -102,14 +101,14 @@ export const StickerPickerPanel: React.FC = () => {
     async (emoji: EmojiItem) => {
       if (!project) return null;
       const created = await insertTimelineOverlay(
-        playheadPosition,
+        useTimelineStore.getState().playheadPosition,
         5,
         (trackId) =>
           createStickerClip(
             stickerLibrary.createEmojiClip(
               emoji,
               trackId,
-              playheadPosition,
+              useTimelineStore.getState().playheadPosition,
               5,
             ),
           ),
@@ -122,21 +121,21 @@ export const StickerPickerPanel: React.FC = () => {
       }
       return created;
     },
-    [createStickerClip, playheadPosition, project, select],
+    [createStickerClip, project, select],
   );
 
   const handleAddSticker = useCallback(
     async (sticker: StickerItem) => {
       if (!project) return null;
       const created = await insertTimelineOverlay(
-        playheadPosition,
+        useTimelineStore.getState().playheadPosition,
         5,
         (trackId) =>
           createStickerClip(
             stickerLibrary.createStickerClip(
               sticker,
               trackId,
-              playheadPosition,
+              useTimelineStore.getState().playheadPosition,
               5,
             ),
           ),
@@ -149,7 +148,7 @@ export const StickerPickerPanel: React.FC = () => {
       }
       return created;
     },
-    [createStickerClip, playheadPosition, project, select],
+    [createStickerClip, project, select],
   );
 
   const handleImportSticker = useCallback(
@@ -181,7 +180,7 @@ export const StickerPickerPanel: React.FC = () => {
           return;
         }
         setImportMessage(
-          `${sticker.name} added at ${formatStickerTime(playheadPosition)}`,
+          `${sticker.name} added at ${formatStickerTime(useTimelineStore.getState().playheadPosition)}`,
         );
       } catch (error) {
         console.error("Failed to import custom sticker", error);
@@ -191,7 +190,7 @@ export const StickerPickerPanel: React.FC = () => {
         if (fileInputRef.current) fileInputRef.current.value = "";
       }
     },
-    [handleAddSticker, playheadPosition],
+    [handleAddSticker],
   );
 
   return (

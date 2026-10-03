@@ -46,7 +46,6 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
     time: shapeClip.startTime,
   });
   const { snapSettings } = useUIStore();
-  const { playheadPosition } = useTimelineStore();
   const trimStartRef = useRef<{
     mouseX: number;
     startTime: number;
@@ -123,7 +122,7 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
         rawTime,
         shapeClip.id,
         allTracks,
-        playheadPosition,
+        useTimelineStore.getState().playheadPosition,
         dragSnapSettings,
         pixelsPerSecond,
         shapeClip.duration,
@@ -176,7 +175,6 @@ export const ShapeClipComponent: React.FC<ShapeClipComponentProps> = ({
     shapeClip.duration,
     onMoveClip,
     snapSettings,
-    playheadPosition,
     endTimingGesture,
     timelineRef,
     allTracks,

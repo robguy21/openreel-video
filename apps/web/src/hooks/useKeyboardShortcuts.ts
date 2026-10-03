@@ -7,6 +7,7 @@ import {
 import { useProjectStore } from "../stores/project-store";
 import { useUIStore } from "../stores/ui-store";
 import { useTimelineStore } from "../stores/timeline-store";
+import { useShallow } from "zustand/react/shallow";
 import {
   deleteTimelineItem,
   duplicateTimelineItem,
@@ -39,11 +40,19 @@ export function useKeyboardShortcuts() {
     togglePlayback,
     seekRelative,
     seekTo,
-    playheadPosition,
     zoomIn,
     zoomOut,
     zoomToFit,
-  } = useTimelineStore();
+  } = useTimelineStore(
+    useShallow((s) => ({
+      togglePlayback: s.togglePlayback,
+      seekRelative: s.seekRelative,
+      seekTo: s.seekTo,
+      zoomIn: s.zoomIn,
+      zoomOut: s.zoomOut,
+      zoomToFit: s.zoomToFit,
+    })),
+  );
 
   const handlePlayPause = useCallback(() => {
     togglePlayback();
@@ -86,7 +95,7 @@ export function useKeyboardShortcuts() {
   }, [seekTo, project]);
 
   const handlePrevClip = useCallback(() => {
-    const currentTime = playheadPosition;
+    const currentTime = useTimelineStore.getState().playheadPosition;
     let prevEdge = 0;
 
     for (const clip of getTimelineItemRanges(project)) {
@@ -100,10 +109,10 @@ export function useKeyboardShortcuts() {
     }
 
     seekTo(prevEdge);
-  }, [seekTo, project, playheadPosition]);
+  }, [seekTo, project]);
 
   const handleNextClip = useCallback(() => {
-    const currentTime = playheadPosition;
+    const currentTime = useTimelineStore.getState().playheadPosition;
     let nextEdge = Infinity;
 
     for (const clip of getTimelineItemRanges(project)) {
@@ -119,7 +128,7 @@ export function useKeyboardShortcuts() {
     if (nextEdge !== Infinity) {
       seekTo(nextEdge);
     }
-  }, [seekTo, project, playheadPosition]);
+  }, [seekTo, project]);
 
   const handleUndo = useCallback(() => {
     undo();
@@ -148,7 +157,7 @@ export function useKeyboardShortcuts() {
   }, [getSelectedClipIds, copyClips, clearSelection]);
 
   const handlePaste = useCallback(() => {
-    const currentTime = playheadPosition;
+    const currentTime = useTimelineStore.getState().playheadPosition;
     const firstTrack = project.timeline.tracks[0];
     if (firstTrack) {
       void pasteClips(firstTrack.id, currentTime).then(() => {
@@ -159,7 +168,7 @@ export function useKeyboardShortcuts() {
         if (pastedSelection.length > 0) selectMultiple(pastedSelection);
       });
     }
-  }, [pasteClips, playheadPosition, project.timeline.tracks, selectMultiple]);
+  }, [pasteClips, project.timeline.tracks, selectMultiple]);
 
   const handleDuplicate = useCallback(() => {
     const selectedIds = getSelectedClipIds();
@@ -202,45 +211,45 @@ export function useKeyboardShortcuts() {
     const splittableIds = getSplittableTimelineItemIds(
       project,
       selectedIds,
-      playheadPosition,
+      useTimelineStore.getState().playheadPosition,
     );
     const store = useProjectStore.getState();
     void Promise.all(
       collapseLinked(store.project, splittableIds).map((id) =>
-        splitTimelineItem(store, id, playheadPosition),
+        splitTimelineItem(store, id, useTimelineStore.getState().playheadPosition),
       ),
     );
-  }, [getSelectedClipIds, playheadPosition, project]);
+  }, [getSelectedClipIds, project]);
 
   const handleTrimStart = useCallback(() => {
     const selectedIds = getSelectedClipIds();
     const trimmableIds = getSplittableTimelineItemIds(
       project,
       selectedIds,
-      playheadPosition,
+      useTimelineStore.getState().playheadPosition,
     );
     const store = useProjectStore.getState();
     void Promise.all(
       collapseLinked(store.project, trimmableIds).map((id) =>
-        trimTimelineItemToPlayhead(store, id, playheadPosition, true),
+        trimTimelineItemToPlayhead(store, id, useTimelineStore.getState().playheadPosition, true),
       ),
     );
-  }, [getSelectedClipIds, playheadPosition, project]);
+  }, [getSelectedClipIds, project]);
 
   const handleTrimEnd = useCallback(() => {
     const selectedIds = getSelectedClipIds();
     const trimmableIds = getSplittableTimelineItemIds(
       project,
       selectedIds,
-      playheadPosition,
+      useTimelineStore.getState().playheadPosition,
     );
     const store = useProjectStore.getState();
     void Promise.all(
       collapseLinked(store.project, trimmableIds).map((id) =>
-        trimTimelineItemToPlayhead(store, id, playheadPosition, false),
+        trimTimelineItemToPlayhead(store, id, useTimelineStore.getState().playheadPosition, false),
       ),
     );
-  }, [getSelectedClipIds, playheadPosition, project]);
+  }, [getSelectedClipIds, project]);
 
   const handleSelectAll = useCallback(() => {
     selectMultiple(getTimelineSelectionItems(project));
@@ -281,10 +290,10 @@ export function useKeyboardShortcuts() {
   const handleAddText = useCallback(() => {}, []);
 
   const handleAddMarker = useCallback(() => {
-    const currentTime = playheadPosition;
+    const currentTime = useTimelineStore.getState().playheadPosition;
     const markerCount = project.timeline.markers.length;
     addMarker(currentTime, `Marker ${markerCount + 1}`, "#3b82f6");
-  }, [playheadPosition, project.timeline.markers.length, addMarker]);
+  }, [project.timeline.markers.length, addMarker]);
 
   useEffect(() => {
     const handlers: Array<[string, ShortcutHandler]> = [

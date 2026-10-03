@@ -91,6 +91,19 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
   const load = useReferenceStore((s) => s.load);
   const stitchFilm = useStudioStore((s) => s.stitchFilm);
   const stitchMaking = useStudioStore((s) => s.stitchMaking);
+  const making = !!stitchMaking && !stitchMaking.failed;
+  const [makingSince, setMakingSince] = useState<number | null>(null);
+  const [, setMakingTick] = useState(0);
+  useEffect(() => {
+    if (!making) {
+      setMakingSince(null);
+      return undefined;
+    }
+    setMakingSince(Date.now());
+    const id = window.setInterval(() => setMakingTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [making]);
+  const makingFor = makingSince === null ? 0 : Math.floor((Date.now() - makingSince) / 1000);
   const filmName = useStudioStore((s) => s.name);
   const partLabel = useStudioStore((s) => s.partLabel);
   const project = useProjectStore((s) => s.project);
@@ -132,6 +145,8 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
 
   const mediaRef = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(source?.duration ?? 0);
   const [playing, setPlaying] = useState(false);
@@ -263,7 +278,14 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
   );
 
   const fullScreen = useCallback(() => {
-    void frameRef.current?.requestFullscreen?.();
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void sectionRef.current?.requestFullscreen?.();
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === sectionRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
   // The keyboard drives the monitor clicked last (R5.4): Space or K plays, the arrows
@@ -331,9 +353,10 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
 
   return (
     <section
+      ref={sectionRef}
       aria-label="Reference monitor"
       onPointerDownCapture={() => setFocus("reference")}
-      className={`or-glass flex min-h-0 min-w-0 flex-col overflow-hidden ${
+      className={`${isFullscreen ? "bg-stage-bg" : "or-glass"} flex min-h-0 min-w-0 flex-col overflow-hidden ${
         focus === "reference" ? "outline outline-1 outline-[color:var(--glass-border)]" : ""
       }`}
     >
@@ -401,7 +424,9 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
               {stitchMaking?.failed
                 ? `The part's cut could not be made: ${firstLine(stitchMaking.failed)}`
                 : stitchMaking
-                  ? `Making the part's cut for the Reference… ${Math.round(stitchMaking.progress * 100)}%`
+                  ? `Making the part's cut for the Reference… ${
+                      stitchMaking.message && !stitchMaking.message.startsWith("Making") ? `${stitchMaking.message}, ` : ""
+                    }${Math.round(stitchMaking.progress * 100)}%, ${Math.floor(makingFor / 60)}:${String(makingFor % 60).padStart(2, "0")}`
                   : "Pick a clip on the timeline or an item in Media to see its whole source here."}
             </p>
           ) : kind === "image" ? (
@@ -541,7 +566,7 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
           </TransportButton>
         </div>
         <div className="flex justify-end">
-          <TransportButton label="Full screen" onClick={fullScreen} disabled={empty}>
+          <TransportButton label={isFullscreen ? "Exit full screen" : "Full screen"} onClick={fullScreen} disabled={empty}>
             <Glyph>
               <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
             </Glyph>
