@@ -425,7 +425,7 @@ export const ReferenceMonitor: React.FC<{ onHide: () => void }> = ({ onHide }) =
                 ? `The part's cut could not be made: ${firstLine(stitchMaking.failed)}`
                 : stitchMaking
                   ? `Making the part's cut for the Reference… ${
-                      /\d+\/\d+/.test(stitchMaking.message) ? `${stitchMaking.message}, ` : ""
+                      stitchMaking.message && !stitchMaking.message.startsWith("Making") ? `${stitchMaking.message}, ` : ""
                     }${Math.round(stitchMaking.progress * 100)}%, ${Math.floor(makingFor / 60)}:${String(makingFor % 60).padStart(2, "0")}`
                   : "Pick a clip on the timeline or an item in Media to see its whole source here."}
             </p>
