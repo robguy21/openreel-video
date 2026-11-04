@@ -11,6 +11,7 @@ import {
 import { useProjectStore } from "../../../stores/project-store";
 import { useUIStore } from "../../../stores/ui-store";
 import { useTimelineStore } from "../../../stores/timeline-store";
+import { isStaleFinal, useStudioStore } from "../../../services/studio/studio-session";
 import {
   calculateSnap,
   getClipStyle,
@@ -76,6 +77,10 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
     (state) => state.effectApplicationLabel,
   );
   const mediaItem = getMediaItem(clip.mediaId);
+  // A Clip Studio final out of date only because a Final Render setting changed: still
+  // laid, and marked here - never in the clip's name, which also names the export.
+  const staleFinal = useStudioStore((s) => isStaleFinal(s, clip.mediaId));
+  const staleNote = useStudioStore((s) => s.staleNote);
   const motionCompositionId =
     typeof clip.metadata?.motionCompositionId === "string"
       ? clip.metadata.motionCompositionId
@@ -783,7 +788,8 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
           ref={clipRef}
           role="button"
           tabIndex={track.locked ? -1 : 0}
-          aria-label={`Select clip ${clipName}`}
+          aria-label={`Select clip ${clipName}${staleFinal ? " (final out of date: settings changed)" : ""}`}
+          title={staleFinal ? staleNote : undefined}
           aria-pressed={isSelected}
           onClick={handleClick}
           onMouseDown={handleMouseDown}
@@ -827,6 +833,12 @@ export const ClipComponent: React.FC<ClipComponentProps> = ({
             {effectApplicationLabel ?? "Applying effect"}
           </div>
         </>
+      )}
+
+      {staleFinal && !isApplyingEffect && (
+        <div className="absolute top-1 right-1 z-20 rounded-full bg-black/70 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-amber-200 pointer-events-none">
+          Settings changed
+        </div>
       )}
 
       {/* Drag-drop hover indicators for effects/transitions */}

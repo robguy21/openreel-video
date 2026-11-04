@@ -77,6 +77,10 @@ export interface StudioShot {
    *  under this shot's start (the stitch's lead-in). 0 or absent is none. */
   lead_in_ms?: number;
   location_ref: string | null;
+  /** The clip is laid at the shot's final although that final is out of date only because
+   *  a Final Render setting changed: still the latest, so it is used, and marked. Absent
+   *  for every other clip and from a studio before the mark. */
+  stale_final?: boolean;
 }
 
 export interface StudioManifest {
@@ -108,6 +112,10 @@ export interface StudioManifest {
    *  left out). Published to the media library, never laid on the timeline. Absent from a
    *  studio before songs. */
   music?: StudioSong[];
+  /** The shots marked `stale_final`, as the studio names them, and its sentence saying so.
+   *  Both absent when there are none. */
+  stale_finals?: string[];
+  stale_note?: string;
   generated: number;
 }
 

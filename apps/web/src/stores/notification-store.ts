@@ -65,10 +65,10 @@ export const toast = {
     useNotificationStore
       .getState()
       .addNotification({ type: "error", title, message, duration: 6000 }),
-  warning: (title: string, message?: string) =>
+  warning: (title: string, message?: string, duration?: number) =>
     useNotificationStore
       .getState()
-      .addNotification({ type: "warning", title, message }),
+      .addNotification({ type: "warning", title, message, ...(duration ? { duration } : {}) }),
   info: (title: string, message?: string) =>
     useNotificationStore
       .getState()

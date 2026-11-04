@@ -80,6 +80,11 @@ export interface StudioSessionState {
   stitchMaking: { progress: number; message: string; failed?: string } | null;
   /** True while the project's songs are being brought into the media library. */
   songsBusy: boolean;
+  /** The video assets of the clips the studio marked `stale_final` (a final out of date
+   *  only because a Final Render setting changed), and the studio's sentence naming them;
+   *  [] and "" when there are none. */
+  staleAssets: string[];
+  staleNote: string;
 }
 
 export const useStudioStore = create<StudioSessionState>()(() => ({
@@ -99,6 +104,8 @@ export const useStudioStore = create<StudioSessionState>()(() => ({
   stitchFilm: null,
   stitchMaking: null,
   songsBusy: false,
+  staleAssets: [],
+  staleNote: "",
 }));
 
 const set = useStudioStore.setState;
@@ -176,6 +183,8 @@ async function doOpen(at: StudioRef): Promise<void> {
     error: null,
     dirty: false,
     media: {},
+    staleAssets: [],
+    staleNote: "",
   });
   try {
     // 1. narration the voice track needs (cached server-side by text + voice)
@@ -194,6 +203,7 @@ async function doOpen(at: StudioRef): Promise<void> {
       partLabel: partLabelOf(manifest),
       stitchFilm: stitchFilmOf(manifest),
       stitchMaking: null,
+      ...staleOf(manifest),
     });
 
     // 3. restore the part's saved edit, or lay out its takes for the first time
@@ -206,6 +216,7 @@ async function doOpen(at: StudioRef): Promise<void> {
 
     set({ status: "ready", message: "", progress: 1, dirty: false });
     startAutosave();
+    warnStale();
 
     // The project's songs, into the media library in the background: the editor does not
     // wait for them.
@@ -239,16 +250,47 @@ export async function rebuildFromFilm(): Promise<void> {
     await saveChain;
     await archiveSavedEdit(at);
     const manifest = await fetchManifest(at);
-    set({ name: manifest.project.name, partLabel: partLabelOf(manifest), stitchFilm: stitchFilmOf(manifest) });
+    set({
+      name: manifest.project.name,
+      partLabel: partLabelOf(manifest),
+      stitchFilm: stitchFilmOf(manifest),
+      ...staleOf(manifest),
+    });
     await buildFromManifest(manifest);
     set({ status: "ready", message: "", progress: 1, dirty: false });
     startAutosave();
+    warnStale();
     void startSongs("open", manifest);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     set({ status: "error", error: msg, message: "" });
     toast.error("Rebuild from the film failed", msg);
   }
+}
+
+/** The manifest's out-of-date finals: the video asset of each clip marked `stale_final`,
+ *  and the studio's own sentence (its `stale_note`) - never written into a clip's name,
+ *  which also names the files, the export and the Premiere package. */
+export function staleOf(manifest: StudioManifest): Pick<StudioSessionState, "staleAssets" | "staleNote"> {
+  const staleAssets = manifest.shots.filter((s) => s.stale_final && s.video).map((s) => s.video!.asset);
+  if (!staleAssets.length) return { staleAssets: [], staleNote: "" };
+  const names = manifest.stale_finals ?? [];
+  const staleNote =
+    manifest.stale_note ||
+    (names.length ? `Final out of date (settings changed): ${names.join(", ")}.` : "Final out of date (settings changed).");
+  return { staleAssets, staleNote };
+}
+
+/** Whether the media item behind a clip is one of those finals. */
+export function isStaleFinal(state: Pick<StudioSessionState, "media" | "staleAssets">, mediaId: string): boolean {
+  const asset = state.media[mediaId]?.asset;
+  return !!asset && state.staleAssets.includes(asset);
+}
+
+/** Say, once the timeline is open, that it lays finals out of date by their settings. */
+function warnStale(): void {
+  const { staleNote } = get();
+  if (staleNote) toast.warning("Final Render settings changed", staleNote, 12000);
 }
 
 /** The manifest's `stitch_export` as the Reference monitor's film, or null. */
